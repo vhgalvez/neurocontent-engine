@@ -70,7 +70,8 @@ def resolve_model_path(base_path: str) -> str:
             print(f"✔ Snapshot detectado: {snap}")
             return str(snap)
 
-    raise RuntimeError(f"No se encontró ningún snapshot válido con config.json en: {snapshots_dir}")
+    raise RuntimeError(
+        f"No se encontró ningún snapshot válido con config.json en: {snapshots_dir}")
 
 
 def load_items():
@@ -99,7 +100,8 @@ def get_device_and_dtype():
 
     if DEVICE_MODE == "cuda":
         if not torch.cuda.is_available():
-            raise RuntimeError("QWEN_TTS_DEVICE=cuda pero torch.cuda.is_available() es False")
+            raise RuntimeError(
+                "QWEN_TTS_DEVICE=cuda pero torch.cuda.is_available() es False")
         print("🚀 Usando GPU (forzado por QWEN_TTS_DEVICE=cuda)")
         return "cuda:0", torch.float16
 
