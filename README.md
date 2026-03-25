@@ -15,10 +15,10 @@
 
 ```mermaid
 graph TD
-	A[ideas.csv] --> B[LLM (Ollama)]
-	B --> C[scripts.json]
-	C --> D[Qwen3-TTS (audio)]
-	D --> E[WhisperX (subtítulos)]
+	A["ideas.csv"] --> B["LLM (Ollama)"]
+	B --> C["scripts.json"]
+	C --> D["Qwen3-TTS (audio)"]
+	D --> E["WhisperX (subtitulos)"]
 ```
 
 ---
