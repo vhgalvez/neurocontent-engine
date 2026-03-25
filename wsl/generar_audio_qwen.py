@@ -1,13 +1,17 @@
 # wsl\generar_audio_qwen.py
 
+from qwen_tts import Qwen3TTSModel
+import torch
+import soundfile as sf
+from pathlib import Path
+import traceback
 import json
 import os
-import traceback
-from pathlib import Path
 
-import soundfile as sf
-import torch
-from qwen_tts import Qwen3TTSModel
+# Silenciar parte del ruido de runtimes auxiliares
+os.environ["ORT_LOGGING_LEVEL"] = "3"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 INPUT_JSON = PROJECT_DIR / "outputs" / "scripts.json"
@@ -35,6 +39,9 @@ OVERWRITE = os.getenv("QWEN_TTS_OVERWRITE", "false").lower() == "true"
 
 # auto | cuda | cpu
 DEVICE_MODE = os.getenv("QWEN_TTS_DEVICE", "auto").lower()
+
+# true | false
+TEST_SHORT_TEXT = os.getenv("QWEN_TTS_TEST_SHORT", "false").lower() == "true"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -118,17 +125,25 @@ def load_model():
     model_path = resolve_model_path(BASE_MODEL_PATH)
     device_map, dtype = get_device_and_dtype()
 
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     kwargs = {
         "device_map": device_map,
-        "dtype": dtype,
+        "torch_dtype": dtype,   # <-- importante
         "trust_remote_code": True,
+        # "low_cpu_mem_usage": True,  # descomenta si hace falta
     }
 
     print(f"📦 Cargando modelo desde: {model_path}")
-    print(f"📦 device_map={device_map}, dtype={dtype}")
+    print(f"📦 device_map={device_map}, torch_dtype={dtype}")
 
     try:
         model = Qwen3TTSModel.from_pretrained(model_path, **kwargs)
+        model.eval()
     except Exception:
         print("❌ Error cargando el modelo:")
         traceback.print_exc()
@@ -160,9 +175,26 @@ def get_script_text(script: dict) -> str:
     return build_fallback_narracion(script)
 
 
+def generate_one(model, text: str):
+    return model.generate_voice_design(
+        text=text,
+        language=LANGUAGE,
+        instruct=VOICE_INSTRUCT,
+    )
+
+
 def main():
     items = load_items()
     model = load_model()
+
+    if TEST_SHORT_TEXT:
+        print("🧪 Modo test corto activado")
+        short_text = "Probando sistema de audio."
+        wavs, sr = generate_one(model, short_text)
+        test_wav = OUTPUT_DIR / "test_short.wav"
+        sf.write(str(test_wav), wavs[0], sr)
+        print(f"🧪 Test OK -> {test_wav}")
+        return
 
     for item in items:
         if item.get("estado") != "done":
@@ -191,11 +223,7 @@ def main():
         print(f"[{item_id}] Texto: {text[:140]}{'...' if len(text) > 140 else ''}")
 
         try:
-            wavs, sr = model.generate_voice_design(
-                text=text,
-                language=LANGUAGE,
-                instruct=VOICE_INSTRUCT,
-            )
+            wavs, sr = generate_one(model, text)
         except Exception:
             print(f"❌ Error generando audio para item {item_id}:")
             traceback.print_exc()
