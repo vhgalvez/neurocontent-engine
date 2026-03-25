@@ -2,18 +2,20 @@
 
 import json
 import os
+import traceback
 from pathlib import Path
 
 import soundfile as sf
 import torch
 from qwen_tts import Qwen3TTSModel
 
-
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 INPUT_JSON = PROJECT_DIR / "outputs" / "scripts.json"
 OUTPUT_DIR = PROJECT_DIR / "outputs" / "audio"
 
-# 🔥 Ruta base (puede ser root o snapshot)
+# Puede ser:
+# - la raíz del cache HF del modelo
+# - o un snapshot concreto
 BASE_MODEL_PATH = os.getenv(
     "QWEN_TTS_MODEL_PATH",
     "/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign",
@@ -31,31 +33,44 @@ VOICE_INSTRUCT = os.getenv(
 LANGUAGE = os.getenv("QWEN_TTS_LANGUAGE", "Spanish")
 OVERWRITE = os.getenv("QWEN_TTS_OVERWRITE", "false").lower() == "true"
 
+# auto | cuda | cpu
+DEVICE_MODE = os.getenv("QWEN_TTS_DEVICE", "auto").lower()
+
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# 🔥 NUEVO: resolver snapshot automáticamente
 def resolve_model_path(base_path: str) -> str:
+    """
+    Resuelve automáticamente el snapshot correcto si la ruta base
+    apunta al directorio raíz del cache de HuggingFace.
+    """
     base = Path(base_path)
 
-    # Si ya es snapshot válido
+    if not base.exists():
+        raise RuntimeError(f"No existe la ruta base del modelo: {base}")
+
+    # Caso 1: ya apunta a un snapshot/directorio válido
     if (base / "config.json").exists():
         print(f"✔ Usando modelo directo: {base}")
         return str(base)
 
+    # Caso 2: apunta al root del modelo en el cache HF
     snapshots_dir = base / "snapshots"
-
     if not snapshots_dir.exists():
-        raise RuntimeError(f"No existe snapshots en {base}")
+        raise RuntimeError(f"No existe la carpeta snapshots en: {base}")
 
-    snapshots = sorted(snapshots_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    snapshots = sorted(
+        [p for p in snapshots_dir.iterdir() if p.is_dir()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
 
     for snap in snapshots:
         if (snap / "config.json").exists():
             print(f"✔ Snapshot detectado: {snap}")
             return str(snap)
 
-    raise RuntimeError("No se encontró snapshot válido con config.json")
+    raise RuntimeError(f"No se encontró ningún snapshot válido con config.json en: {snapshots_dir}")
 
 
 def load_items():
@@ -72,41 +87,75 @@ def load_items():
 
 
 def get_device_and_dtype():
+    """
+    Selección robusta de dispositivo:
+    - QWEN_TTS_DEVICE=cpu   -> fuerza CPU
+    - QWEN_TTS_DEVICE=cuda  -> fuerza GPU
+    - auto                  -> usa GPU si torch la ve
+    """
+    if DEVICE_MODE == "cpu":
+        print("⚠ Usando CPU (forzado por QWEN_TTS_DEVICE=cpu)")
+        return "cpu", torch.float32
+
+    if DEVICE_MODE == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("QWEN_TTS_DEVICE=cuda pero torch.cuda.is_available() es False")
+        print("🚀 Usando GPU (forzado por QWEN_TTS_DEVICE=cuda)")
+        return "cuda:0", torch.float16
+
+    # auto
     if torch.cuda.is_available():
-        print("🚀 Usando GPU")
-        return "cuda:0", torch.bfloat16
-    print("⚠ Usando CPU")
+        print("🚀 Usando GPU (auto)")
+        return "cuda:0", torch.float16
+
+    print("⚠ Usando CPU (auto fallback)")
     return "cpu", torch.float32
 
 
 def load_model():
     model_path = resolve_model_path(BASE_MODEL_PATH)
-
     device_map, dtype = get_device_and_dtype()
 
     kwargs = {
         "device_map": device_map,
         "dtype": dtype,
-        "trust_remote_code": True,  # 🔥 CLAVE
+        "trust_remote_code": True,
     }
 
-    if str(device_map).startswith("cuda"):
-        kwargs["attn_implementation"] = "flash_attention_2"
-
     print(f"📦 Cargando modelo desde: {model_path}")
+    print(f"📦 device_map={device_map}, dtype={dtype}")
 
     try:
         model = Qwen3TTSModel.from_pretrained(model_path, **kwargs)
-    except Exception as e:
-        print("⚠ Fallo con flash_attention, reintentando...")
-        kwargs.pop("attn_implementation", None)
-        model = Qwen3TTSModel.from_pretrained(model_path, **kwargs)
+    except Exception:
+        print("❌ Error cargando el modelo:")
+        traceback.print_exc()
+        raise
 
     return model
 
 
 def sanitize_text(text: str) -> str:
-    return " ".join(text.split()).strip()
+    return " ".join(str(text).split()).strip()
+
+
+def build_fallback_narracion(script: dict) -> str:
+    partes = [
+        script.get("hook", ""),
+        script.get("problema", ""),
+        script.get("explicacion", ""),
+        *script.get("solucion", []),
+        script.get("cierre", ""),
+        script.get("cta", ""),
+    ]
+    return sanitize_text(". ".join([str(p) for p in partes if str(p).strip()]))
+
+
+def get_script_text(script: dict) -> str:
+    narracion = sanitize_text(script.get("narracion", ""))
+    if narracion:
+        return narracion
+    return build_fallback_narracion(script)
 
 
 def main():
@@ -120,15 +169,11 @@ def main():
         item_id = str(item.get("id", "")).strip()
         script = item.get("script", {})
 
-        # 🔥 IMPORTANTE: fallback si no existe narracion
-        text = sanitize_text(
-            script.get("narracion")
-            or f"{script.get('hook','')}. {script.get('problema','')}. {script.get('explicacion','')}. {' '.join(script.get('solucion',[]))}. {script.get('cierre','')}. {script.get('cta','')}"
-        )
-
         if not item_id:
-            print("Saltando item sin id")
+            print("⚠ Saltando item sin id")
             continue
+
+        text = get_script_text(script)
 
         if not text:
             print(f"[{item_id}] No hay narración, se omite")
@@ -137,18 +182,29 @@ def main():
         output_wav = OUTPUT_DIR / f"{item_id}.wav"
 
         if output_wav.exists() and not OVERWRITE:
-            print(f"[{item_id}] Ya existe, se omite")
+            print(f"[{item_id}] Ya existe {output_wav.name}, se omite")
             continue
 
         print(f"[{item_id}] Generando audio...")
+        print(f"[{item_id}] Texto: {text[:140]}{'...' if len(text) > 140 else ''}")
 
-        wavs, sr = model.generate_voice_design(
-            text=text,
-            language=LANGUAGE,
-            instruct=VOICE_INSTRUCT,
-        )
+        try:
+            wavs, sr = model.generate_voice_design(
+                text=text,
+                language=LANGUAGE,
+                instruct=VOICE_INSTRUCT,
+            )
+        except Exception:
+            print(f"❌ Error generando audio para item {item_id}:")
+            traceback.print_exc()
+            continue
 
-        sf.write(str(output_wav), wavs[0], sr)
+        try:
+            sf.write(str(output_wav), wavs[0], sr)
+        except Exception:
+            print(f"❌ Error guardando WAV para item {item_id}:")
+            traceback.print_exc()
+            continue
 
         print(f"[{item_id}] OK -> {output_wav}")
 
