@@ -1,0 +1,62 @@
+[
+  {
+    "id": "1",
+    "estado": "done",
+    "idea_central": "trabajar duro no te hará rico",
+    "plataforma": "tiktok",
+    "duracion_seg": "60",
+    "script": {
+      "hook": "Trabajas duro, pero no avanzas",
+      "problema": "Estancado en tu sueldo sin progreso",
+      "explicacion": "Trabajar duro no te hace rico. Necesitas estrategia financiera",
+      "solucion": [
+        "Identifica tus ingresos pasivos",
+        "Crear activos que generen dinero",
+        "Invirtiendo sabiamente"
+      ],
+      "cierre": "No quedarás atrapado. Sígueme para más verdades",
+      "cta": "Sígueme para más verdades que te harán avanzar",
+      "narracion": "Trabajas duro, pero no avanzas. Estancado en tu sueldo sin progreso. Trabajar duro no te hace rico. Necesitas estrategia financiera. Identifica tus ingresos pasivos. Crear activos que generen dinero. Invirtiendo sabiamente. No quedarás atrapado. Sígueme para más verdades. Sígueme para más verdades que te harán avanzar."
+    }
+  },
+  {
+    "id": "2",
+    "estado": "done",
+    "idea_central": "el error invisible que vacía tu cuenta",
+    "plataforma": "reels",
+    "duracion_seg": "45",
+    "script": {
+      "hook": "¿Por qué siempre falta dinero en tu cuenta?",
+      "problema": "Gastas sin control, no te das cuenta, se escapa cada mes.",
+      "explicacion": "No es solo cuánto ganas. Los hábitos automáticos de gasto son la verdad.",
+      "solucion": [
+        "Registra tus gastos",
+        "Categoriza tus compras",
+        "Establece presupuesto semanal"
+      ],
+      "cierre": "Guarda este video si quieres ordenar tu vida financiera hoy",
+      "cta": "Guarda este video si quieres aplicarlo hoy",
+      "narracion": "Por qué siempre falta dinero en tu cuenta. Gastas sin control, no te das cuenta, se escapa cada mes. No es solo cuánto ganas. Los hábitos automáticos de gasto son la verdad. Registra tus gastos. Categoriza tus compras. Establece presupuesto semanal. Guarda este video si quieres ordenar tu vida financiera hoy. Guarda este video si quieres aplicarlo hoy."
+    }
+  },
+  {
+    "id": "3",
+    "estado": "done",
+    "idea_central": "la diferencia real entre pobre y rico",
+    "plataforma": "shorts",
+    "duracion_seg": "50",
+    "script": {
+      "hook": "Pobre vs rico, ¿dónde estás?",
+      "problema": "Pensando como pobre, viviendo de sueldo a sueldo.",
+      "explicacion": "La diferencia empieza en la mente. Ricohos toman decisiones diferentes.",
+      "solucion": [
+        "Entiende riqueza",
+        "Cambia pensamiento",
+        "Actúa diferente"
+      ],
+      "cierre": "O te creces, o quedas en el sueldo. ¡Comenta riqueza!",
+      "cta": "Comenta riqueza si quieres más videos así",
+      "narracion": "Pobre vs rico, dónde estás. Pensando como pobre, viviendo de sueldo a sueldo. La diferencia empieza en la mente. Ricohos toman decisiones diferentes. Entiende riqueza. Cambia pensamiento. Actúa diferente. O te creces, o quedas en el sueldo. Comenta riqueza. Comenta riqueza si quieres más videos así."
+    }
+  }
+]
