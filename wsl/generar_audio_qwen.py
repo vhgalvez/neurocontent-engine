@@ -1,24 +1,26 @@
 # wsl\generar_audio_qwen.py
 
-from qwen_tts import Qwen3TTSModel
-import torch
-import soundfile as sf
-from pathlib import Path
-import traceback
-import json
 import os
 
-# Silenciar parte del ruido de runtimes auxiliares
+# Reducir ruido de librerías auxiliares
 os.environ["ORT_LOGGING_LEVEL"] = "3"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+import json
+import traceback
+from pathlib import Path
+
+import soundfile as sf
+import torch
+from qwen_tts import Qwen3TTSModel
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 INPUT_JSON = PROJECT_DIR / "outputs" / "scripts.json"
 OUTPUT_DIR = PROJECT_DIR / "outputs" / "audio"
 
-# Puede ser:
-# - la raíz del cache HF del modelo
+# Puedes pasar:
+# - root del modelo en el cache HF
 # - o un snapshot concreto
 BASE_MODEL_PATH = os.getenv(
     "QWEN_TTS_MODEL_PATH",
@@ -48,20 +50,18 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def resolve_model_path(base_path: str) -> str:
     """
-    Resuelve automáticamente el snapshot correcto si la ruta base
-    apunta al directorio raíz del cache de HuggingFace.
+    Si la ruta ya contiene config.json, la usa.
+    Si no, intenta resolver automáticamente el snapshot más reciente con config.json.
     """
     base = Path(base_path)
 
     if not base.exists():
         raise RuntimeError(f"No existe la ruta base del modelo: {base}")
 
-    # Caso 1: ya apunta a un snapshot/directorio válido
     if (base / "config.json").exists():
         print(f"✔ Usando modelo directo: {base}")
         return str(base)
 
-    # Caso 2: apunta al root del modelo en el cache HF
     snapshots_dir = base / "snapshots"
     if not snapshots_dir.exists():
         raise RuntimeError(f"No existe la carpeta snapshots en: {base}")
@@ -77,8 +77,7 @@ def resolve_model_path(base_path: str) -> str:
             print(f"✔ Snapshot detectado: {snap}")
             return str(snap)
 
-    raise RuntimeError(
-        f"No se encontró ningún snapshot válido con config.json en: {snapshots_dir}")
+    raise RuntimeError(f"No se encontró snapshot válido con config.json en: {snapshots_dir}")
 
 
 def load_items():
@@ -95,24 +94,16 @@ def load_items():
 
 
 def get_device_and_dtype():
-    """
-    Selección robusta de dispositivo:
-    - QWEN_TTS_DEVICE=cpu   -> fuerza CPU
-    - QWEN_TTS_DEVICE=cuda  -> fuerza GPU
-    - auto                  -> usa GPU si torch la ve
-    """
     if DEVICE_MODE == "cpu":
         print("⚠ Usando CPU (forzado por QWEN_TTS_DEVICE=cpu)")
         return "cpu", torch.float32
 
     if DEVICE_MODE == "cuda":
         if not torch.cuda.is_available():
-            raise RuntimeError(
-                "QWEN_TTS_DEVICE=cuda pero torch.cuda.is_available() es False")
+            raise RuntimeError("QWEN_TTS_DEVICE=cuda pero torch.cuda.is_available() es False")
         print("🚀 Usando GPU (forzado por QWEN_TTS_DEVICE=cuda)")
         return "cuda:0", torch.float16
 
-    # auto
     if torch.cuda.is_available():
         print("🚀 Usando GPU (auto)")
         return "cuda:0", torch.float16
@@ -133,13 +124,13 @@ def load_model():
 
     kwargs = {
         "device_map": device_map,
-        "torch_dtype": dtype,   # <-- importante
+        "dtype": dtype,
         "trust_remote_code": True,
-        # "low_cpu_mem_usage": True,  # descomenta si hace falta
+        "low_cpu_mem_usage": True,
     }
 
     print(f"📦 Cargando modelo desde: {model_path}")
-    print(f"📦 device_map={device_map}, torch_dtype={dtype}")
+    print(f"📦 device_map={device_map}, dtype={dtype}")
 
     try:
         model = Qwen3TTSModel.from_pretrained(model_path, **kwargs)
