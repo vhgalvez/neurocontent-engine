@@ -126,10 +126,4 @@ El README ya refleja eso correctamente:
 
 ---
 
-## 10. ¿Qué sigue?
-
-¿Quieres el siguiente paso?
-
-👉 `render_video.py` con FFmpeg (automático con imágenes + audio + subtítulos)
-
-y ya cierras el sistema completo
+## 10. 📞 Contacto
