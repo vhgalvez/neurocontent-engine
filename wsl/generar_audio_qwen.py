@@ -1,27 +1,27 @@
 # wsl\generar_audio_qwen.py
 
+from qwen_tts import Qwen3TTSModel
+import torch
+import soundfile as sf
+from pathlib import Path
+import traceback
+import json
 import os
 
-# Reducir ruido de librerías auxiliares
+# Menos ruido de runtimes auxiliares
 os.environ["ORT_LOGGING_LEVEL"] = "3"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-import json
-import traceback
-from pathlib import Path
-
-import soundfile as sf
-import torch
-from qwen_tts import Qwen3TTSModel
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 INPUT_JSON = PROJECT_DIR / "outputs" / "scripts.json"
 OUTPUT_DIR = PROJECT_DIR / "outputs" / "audio"
 
 # Puedes pasar:
-# - root del modelo en el cache HF
-# - o un snapshot concreto
+# - un model id HF: "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+# - un directorio local descargado con huggingface-cli --local-dir
+# - o la raíz del cache HF / snapshot, y el script intentará resolver el snapshot
 BASE_MODEL_PATH = os.getenv(
     "QWEN_TTS_MODEL_PATH",
     "/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign",
@@ -45,14 +45,25 @@ DEVICE_MODE = os.getenv("QWEN_TTS_DEVICE", "auto").lower()
 # true | false
 TEST_SHORT_TEXT = os.getenv("QWEN_TTS_TEST_SHORT", "false").lower() == "true"
 
+# true | false
+USE_FLASH_ATTN = os.getenv("QWEN_TTS_USE_FLASH_ATTN",
+                           "false").lower() == "true"
+
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def resolve_model_path(base_path: str) -> str:
     """
-    Si la ruta ya contiene config.json, la usa.
-    Si no, intenta resolver automáticamente el snapshot más reciente con config.json.
+    Acepta:
+    - model id HF => se devuelve tal cual
+    - directorio local con config.json => se devuelve tal cual
+    - raíz del cache HF => resuelve el snapshot más reciente con config.json
     """
+    # Si parece model id HF, no tocarlo
+    if "/" in base_path and not base_path.startswith("/"):
+        print(f"✔ Usando model id HF: {base_path}")
+        return base_path
+
     base = Path(base_path)
 
     if not base.exists():
@@ -77,7 +88,8 @@ def resolve_model_path(base_path: str) -> str:
             print(f"✔ Snapshot detectado: {snap}")
             return str(snap)
 
-    raise RuntimeError(f"No se encontró snapshot válido con config.json en: {snapshots_dir}")
+    raise RuntimeError(
+        f"No se encontró snapshot válido con config.json en: {snapshots_dir}")
 
 
 def load_items():
@@ -100,7 +112,8 @@ def get_device_and_dtype():
 
     if DEVICE_MODE == "cuda":
         if not torch.cuda.is_available():
-            raise RuntimeError("QWEN_TTS_DEVICE=cuda pero torch.cuda.is_available() es False")
+            raise RuntimeError(
+                "QWEN_TTS_DEVICE=cuda pero torch.cuda.is_available() es False")
         print("🚀 Usando GPU (forzado por QWEN_TTS_DEVICE=cuda)")
         return "cuda:0", torch.float16
 
@@ -124,17 +137,23 @@ def load_model():
 
     kwargs = {
         "device_map": device_map,
-        "dtype": dtype,
+        "dtype": dtype,  # docs y runtime actual prefieren dtype
         "trust_remote_code": True,
         "low_cpu_mem_usage": True,
     }
 
+    # FlashAttention 2 es recomendado por el repo para reducir VRAM,
+    # pero lo dejamos opt-in para no romper el entorno si no está instalado.
+    if USE_FLASH_ATTN and str(device_map).startswith("cuda"):
+        kwargs["attn_implementation"] = "flash_attention_2"
+
     print(f"📦 Cargando modelo desde: {model_path}")
-    print(f"📦 device_map={device_map}, dtype={dtype}")
+    print(
+        f"📦 device_map={device_map}, dtype={dtype}, flash_attn={USE_FLASH_ATTN}")
 
     try:
         model = Qwen3TTSModel.from_pretrained(model_path, **kwargs)
-        model.eval()
+        # NO usar model.eval(): este wrapper puede no exponer ese método
     except Exception:
         print("❌ Error cargando el modelo:")
         traceback.print_exc()
