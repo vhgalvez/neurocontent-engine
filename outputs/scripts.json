@@ -6,17 +6,17 @@
     "plataforma": "tiktok",
     "duracion_seg": "60",
     "script": {
-      "hook": "Trabajas duro, pero no avanzas",
-      "problema": "Estancado en tu sueldo sin progreso",
-      "explicacion": "Trabajar duro no te hace rico. Necesitas estrategia financiera",
+      "hook": "Trabajas mucho, pero te queda poco.",
+      "problema": "Ganas un sueldo, pero nunca llegas a fin de mes.",
+      "explicacion": "Trabajar duro no basta. Necesitas estrategia financiera.",
       "solucion": [
-        "Identifica tus ingresos pasivos",
-        "Crear activos que generen dinero",
-        "Invirtiendo sabiamente"
+        "Identifica ingresos pasivos",
+        "Crea activos valiosos",
+        "Automatiza gastos innecesarios"
       ],
-      "cierre": "No quedarás atrapado. Sígueme para más verdades",
+      "cierre": "Te atraparán si confías solo en tu sueldo.",
       "cta": "Sígueme para más verdades que te harán avanzar",
-      "narracion": "Trabajas duro, pero no avanzas. Estancado en tu sueldo sin progreso. Trabajar duro no te hace rico. Necesitas estrategia financiera. Identifica tus ingresos pasivos. Crear activos que generen dinero. Invirtiendo sabiamente. No quedarás atrapado. Sígueme para más verdades. Sígueme para más verdades que te harán avanzar."
+      "narracion": "Trabajas mucho, pero te queda poco. Ganas un sueldo, pero nunca llegas a fin de mes. Trabajar duro no basta. Necesitas estrategia financiera. Identifica ingresos pasivos. Crea activos valiosos. Automatiza gastos innecesarios. Te atraparán si confías solo en tu sueldo. Sígueme para más verdades que te harán avanzar."
     }
   },
   {
@@ -26,17 +26,17 @@
     "plataforma": "reels",
     "duracion_seg": "45",
     "script": {
-      "hook": "¿Por qué siempre falta dinero en tu cuenta?",
-      "problema": "Gastas sin control, no te das cuenta, se escapa cada mes.",
-      "explicacion": "No es solo cuánto ganas. Los hábitos automáticos de gasto son la verdad.",
+      "hook": "¿Por qué siempre falta dinero?",
+      "problema": "Gasto sin control, plata se va rápido.",
+      "explicacion": "Repites malos hábitos. Necesitas conciencia y planificación.",
       "solucion": [
-        "Registra tus gastos",
-        "Categoriza tus compras",
-        "Establece presupuesto semanal"
+        "Registra gastos",
+        "Crea presupuesto",
+        "Automatiza ahorro"
       ],
-      "cierre": "Guarda este video si quieres ordenar tu vida financiera hoy",
+      "cierre": "Entendiste el error. Guarda si quieres cambiar hoy!",
       "cta": "Guarda este video si quieres aplicarlo hoy",
-      "narracion": "Por qué siempre falta dinero en tu cuenta. Gastas sin control, no te das cuenta, se escapa cada mes. No es solo cuánto ganas. Los hábitos automáticos de gasto son la verdad. Registra tus gastos. Categoriza tus compras. Establece presupuesto semanal. Guarda este video si quieres ordenar tu vida financiera hoy. Guarda este video si quieres aplicarlo hoy."
+      "narracion": "Por qué siempre falta dinero. Gasto sin control, plata se va rápido. Repites malos hábitos. Necesitas conciencia y planificación. Registra gastos. Crea presupuesto. Automatiza ahorro. Entendiste el error. Guarda si quieres cambiar hoy. Guarda este video si quieres aplicarlo hoy."
     }
   },
   {
@@ -46,17 +46,17 @@
     "plataforma": "shorts",
     "duracion_seg": "50",
     "script": {
-      "hook": "Pobre vs rico, ¿dónde estás?",
-      "problema": "Pensando como pobre, viviendo de sueldo a sueldo.",
-      "explicacion": "La diferencia empieza en la mente. Ricohos toman decisiones diferentes.",
+      "hook": "Rico vs Pobre, ¿Qué diferencia? ",
+      "problema": "Piensas como pobre, vives como raro. ",
+      "explicacion": "La cuenta no miente. La mente sí. Cambia tus decisiones, cambia tu vida. ",
       "solucion": [
-        "Entiende riqueza",
-        "Cambia pensamiento",
-        "Actúa diferente"
+        "Identifica patrones",
+        "Cambia hábitos",
+        "Planifica inversiones"
       ],
-      "cierre": "O te creces, o quedas en el sueldo. ¡Comenta riqueza!",
+      "cierre": "¿Qué piensas? Comenta riqueza si quieres más videos así",
       "cta": "Comenta riqueza si quieres más videos así",
-      "narracion": "Pobre vs rico, dónde estás. Pensando como pobre, viviendo de sueldo a sueldo. La diferencia empieza en la mente. Ricohos toman decisiones diferentes. Entiende riqueza. Cambia pensamiento. Actúa diferente. O te creces, o quedas en el sueldo. Comenta riqueza. Comenta riqueza si quieres más videos así."
+      "narracion": "Rico vs Pobre, Qué diferencia. Piensas como pobre, vives como raro. La cuenta no miente. La mente sí. Cambia tus decisiones, cambia tu vida. Identifica patrones. Cambia hábitos. Planifica inversiones. Qué piensas. Comenta riqueza si quieres más videos así. Comenta riqueza si quieres más videos así."
     }
   }
 ]

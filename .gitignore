@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+venv/
+.env/
+.env.*
+
+# VS Code / IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Outputs (opcional, pero recomendado)
+outputs/audio/
+outputs/subtitles/
+outputs/*.wav
+outputs/*.srt
+
+# Cache adicional
+.cache/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
