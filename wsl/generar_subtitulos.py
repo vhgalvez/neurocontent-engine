@@ -1,7 +1,6 @@
 # wsl\generar_subtitulos.py
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -9,28 +8,25 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 AUDIO_DIR = PROJECT_DIR / "outputs" / "audio"
 SUB_DIR = PROJECT_DIR / "outputs" / "subtitles"
 
+WHISPERX_BIN = os.getenv("WHISPERX_BIN", str(Path.home() / "whisperx-venv" / "bin" / "whisperx"))
 WHISPER_MODEL = os.getenv("WHISPERX_MODEL", "medium")
 LANGUAGE = os.getenv("WHISPERX_LANGUAGE", "es")
+DEVICE = os.getenv("WHISPERX_DEVICE", "cuda")
+COMPUTE_TYPE = os.getenv("WHISPERX_COMPUTE_TYPE", "float16")
 OVERWRITE = os.getenv("WHISPERX_OVERWRITE", "false").lower() == "true"
 
 SUB_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def get_whisperx_command() -> list[str]:
-    whisperx_bin = shutil.which("whisperx")
-    if whisperx_bin:
-        return [whisperx_bin]
-    return ["python3", "-m", "whisperx"]
-
-
 def main():
+    if not Path(WHISPERX_BIN).exists():
+        raise FileNotFoundError(f"No existe WHISPERX_BIN: {WHISPERX_BIN}")
+
     wav_files = sorted(AUDIO_DIR.glob("*.wav"))
 
     if not wav_files:
         print("No hay archivos WAV en outputs/audio")
         return
-
-    base_cmd = get_whisperx_command()
 
     for wav in wav_files:
         expected_srt = SUB_DIR / f"{wav.stem}.srt"
@@ -41,10 +37,13 @@ def main():
 
         print(f"Generando subtítulos para: {wav.name}")
 
-        cmd = base_cmd + [
+        cmd = [
+            WHISPERX_BIN,
             str(wav),
             "--model", WHISPER_MODEL,
             "--language", LANGUAGE,
+            "--device", DEVICE,
+            "--compute_type", COMPUTE_TYPE,
             "--output_format", "srt",
             "--output_dir", str(SUB_DIR),
         ]
