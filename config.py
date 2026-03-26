@@ -1,22 +1,31 @@
-# config.py
-
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-OUTPUTS_DIR = BASE_DIR / "outputs"
+JOBS_DIR = BASE_DIR / "jobs"
+WSL_DIR = BASE_DIR / "wsl"
 
 DATA_FILE = DATA_DIR / "ideas.csv"
-OUTPUT_FILE = OUTPUTS_DIR / "scripts.json"
+INDEX_FILE = DATA_DIR / "index.csv"
+
+JOB_ID_WIDTH = 6
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "qwen2.5:7b"
 
 OPTIONS = {
-    "num_ctx": 1536,
-    "num_predict": 420,
-    "temperature": 0.75,
+    "num_ctx": 2048,
+    "num_predict": 700,
+    "temperature": 0.72,
     "top_p": 0.9,
 }
 
 REQUEST_TIMEOUT_SECONDS = 180
+OLLAMA_MAX_RETRIES = int(os.getenv("NC_OLLAMA_MAX_RETRIES", "2"))
+
+# Overwrite flags for the editorial pipeline.
+# By default the project is idempotent and reuses job artifacts if they already exist.
+OVERWRITE_ALL = os.getenv("NC_OVERWRITE_ALL", "false").lower() == "true"
+OVERWRITE_SCRIPT = os.getenv("NC_OVERWRITE_SCRIPT", "false").lower() == "true" or OVERWRITE_ALL
+OVERWRITE_MANIFEST = os.getenv("NC_OVERWRITE_MANIFEST", "false").lower() == "true" or OVERWRITE_ALL

@@ -1,11 +1,21 @@
-# main.py
-
 import csv
-import json
 from typing import Any, Dict, List
 
-from config import DATA_FILE, OUTPUT_FILE
-from director import OllamaError, generate_script
+from config import DATA_FILE, JOBS_DIR, OVERWRITE_MANIFEST, OVERWRITE_SCRIPT
+from director import (
+    OllamaError,
+    build_index_row,
+    build_visual_manifest,
+    get_job_paths,
+    pad_job_id,
+    safe_read_json,
+    safe_write_json,
+    sync_status_with_files,
+    update_status,
+    validate_script_data,
+    write_index,
+    generate_script,
+)
 
 REQUIRED_COLUMNS = {
     "id",
@@ -80,64 +90,146 @@ def load_briefs() -> List[Dict[str, Any]]:
 
         for row in reader:
             clean_row = _clean_row(row)
-            estado = clean_row.get("estado", "").lower()
-            if estado != "pending":
-                continue
             briefs.append(clean_row)
-
-    if not briefs:
-        raise ValueError(f"No hay briefs con estado 'pending' en {DATA_FILE}")
 
     return briefs
 
 
-def save_results(results: List[Dict[str, Any]]) -> None:
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with OUTPUT_FILE.open("w", encoding="utf-8") as file:
-        json.dump(results, file, ensure_ascii=False, indent=2)
+def load_pending_briefs() -> List[Dict[str, Any]]:
+    return [brief for brief in load_briefs() if brief.get("estado", "").lower() == "pending"]
+
+
+def _load_or_generate_script(brief: Dict[str, Any], paths: Dict[str, Any]) -> Dict[str, Any]:
+    if paths["script"].exists() and not OVERWRITE_SCRIPT:
+        update_status(paths["status"], script_generated=True, last_step="script_reused")
+        existing_script = safe_read_json(paths["script"], default={}) or {}
+        if not existing_script:
+            raise ValueError(f"script.json vacio o invalido para job {paths['job_dir'].name}")
+        validate_script_data(existing_script)
+        return existing_script
+
+    script = generate_script(brief)
+    safe_write_json(paths["script"], script)
+    update_status(paths["status"], script_generated=True, last_step="script_generated")
+    return script
+
+
+def _load_or_generate_manifest(
+    brief: Dict[str, Any],
+    script: Dict[str, Any],
+    paths: Dict[str, Any],
+    job_id: str,
+) -> Dict[str, Any]:
+    if paths["manifest"].exists() and not OVERWRITE_MANIFEST:
+        update_status(paths["status"], visual_manifest_generated=True, last_step="manifest_reused")
+        existing_manifest = safe_read_json(paths["manifest"], default={}) or {}
+        if not existing_manifest:
+            raise ValueError(f"visual_manifest.json vacio o invalido para job {job_id}")
+        return existing_manifest
+
+    manifest = build_visual_manifest(
+        brief=brief,
+        script=script,
+        job_id=job_id,
+        audio_path=paths["audio"],
+        subtitles_path=paths["subtitles"],
+    )
+    safe_write_json(paths["manifest"], manifest)
+    update_status(
+        paths["status"],
+        visual_manifest_generated=True,
+        last_step="visual_manifest_generated",
+    )
+    return manifest
+
+
+def process_brief(brief: Dict[str, Any]) -> Dict[str, Any]:
+    job_id = pad_job_id(brief.get("id"))
+    paths = get_job_paths(job_id)
+
+    # The CSV remains the editorial source of truth, so brief.json is refreshed from it.
+    safe_write_json(paths["brief"], brief)
+    update_status(paths["status"], brief_created=True, last_step="brief_synced_from_csv")
+
+    script = _load_or_generate_script(brief, paths)
+    _load_or_generate_manifest(brief, script, paths, job_id)
+
+    status = sync_status_with_files(paths)
+    return build_index_row(brief, status, job_id)
+
+
+def build_error_index_row(brief: Dict[str, Any], message: str) -> Dict[str, Any]:
+    job_id = pad_job_id(brief.get("id"))
+    paths = get_job_paths(job_id)
+
+    safe_write_json(paths["brief"], brief)
+    status = update_status(
+        paths["status"],
+        brief_created=True,
+        script_generated=paths["script"].exists(),
+        visual_manifest_generated=paths["manifest"].exists(),
+        last_step=f"error: {message}",
+    )
+    return build_index_row(brief, status, job_id)
+
+
+def build_derived_index(all_briefs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    index_rows: List[Dict[str, Any]] = []
+
+    for brief in all_briefs:
+        job_id = pad_job_id(brief.get("id"))
+        paths = {
+            "job_dir": JOBS_DIR / job_id,
+            "brief": JOBS_DIR / job_id / "brief.json",
+            "script": JOBS_DIR / job_id / "script.json",
+            "status": JOBS_DIR / job_id / "status.json",
+            "manifest": JOBS_DIR / job_id / "visual_manifest.json",
+            "audio": JOBS_DIR / job_id / "audio" / "narration.wav",
+            "subtitles": JOBS_DIR / job_id / "subtitles" / "narration.srt",
+        }
+        has_job_material = any(
+            path.exists()
+            for key, path in paths.items()
+            if key != "job_dir"
+        )
+
+        if not has_job_material and brief.get("estado", "").lower() != "pending":
+            continue
+
+        if brief.get("estado", "").lower() == "pending" and not paths["brief"].exists():
+            continue
+
+        status = sync_status_with_files(paths)
+        index_rows.append(build_index_row(brief, status, job_id))
+
+    return index_rows
 
 
 def main() -> None:
-    print("Cargando briefs...")
-    briefs = load_briefs()
+    print("Cargando briefs pendientes...")
+    all_briefs = load_briefs()
+    briefs = [brief for brief in all_briefs if brief.get("estado", "").lower() == "pending"]
 
-    results: List[Dict[str, Any]] = []
+    if not briefs:
+        print("No hay briefs pendientes. Reconstruyendo solo data/index.csv como indice derivado.")
+        write_index(build_derived_index(all_briefs))
+        return
 
-    for index, brief in enumerate(briefs, start=1):
-        title = brief.get("idea_central", f"brief_{index}")
-        print(f"[{index}/{len(briefs)}] {title}")
+    for position, brief in enumerate(briefs, start=1):
+        title = brief.get("idea_central", f"brief_{position}")
+        print(f"[{position}/{len(briefs)}] Procesando: {title}")
 
         try:
-            script = generate_script(brief)
-
-            results.append({
-                "id": brief.get("id"),
-                "estado": "done",
-                "idea_central": brief.get("idea_central"),
-                "plataforma": brief.get("plataforma"),
-                "duracion_seg": brief.get("duracion_seg"),
-                "script": script,
-            })
-
+            process_brief(brief)
         except OllamaError as exc:
-            print(f"ERROR: {exc}")
-            results.append({
-                "id": brief.get("id"),
-                "estado": "error",
-                "idea_central": brief.get("idea_central"),
-                "error": str(exc),
-            })
+            print(f"ERROR Ollama: {exc}")
+            build_error_index_row(brief, str(exc))
         except Exception as exc:
             print(f"ERROR inesperado: {exc}")
-            results.append({
-                "id": brief.get("id"),
-                "estado": "error",
-                "idea_central": brief.get("idea_central"),
-                "error": f"Error inesperado: {exc}",
-            })
+            build_error_index_row(brief, f"Error inesperado: {exc}")
 
-    save_results(results)
-    print(f"Resultado guardado en: {OUTPUT_FILE}")
+    write_index(build_derived_index(all_briefs))
+    print("Pipeline editorial completado.")
 
 
 if __name__ == "__main__":

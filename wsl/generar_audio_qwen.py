@@ -1,76 +1,104 @@
-# wsl\generar_audio_qwen.py
-
-from qwen_tts import Qwen3TTSModel
-import torch
-import soundfile as sf
-from pathlib import Path
-import traceback
 import json
 import os
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
 
-# Menos ruido de runtimes auxiliares
+import soundfile as sf
+import torch
+from qwen_tts import Qwen3TTSModel
+
 os.environ["ORT_LOGGING_LEVEL"] = "3"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-INPUT_JSON = PROJECT_DIR / "outputs" / "scripts.json"
-OUTPUT_DIR = PROJECT_DIR / "outputs" / "audio"
+JOBS_DIR = PROJECT_DIR / "jobs"
 
-# Puedes pasar:
-# - un model id HF: "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
-# - un directorio local descargado con huggingface-cli --local-dir
-# - o la raíz del cache HF / snapshot, y el script intentará resolver el snapshot
+# This repository stops at narration audio generation.
+# The downstream visual repository should consume jobs/<id>/audio/narration.wav
+# together with visual_manifest.json and subtitles for timing-aware editing.
+
 BASE_MODEL_PATH = os.getenv(
     "QWEN_TTS_MODEL_PATH",
     "/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign",
 )
-
 VOICE_INSTRUCT = os.getenv(
     "QWEN_TTS_VOICE_INSTRUCT",
     (
         "Voz masculina sobria, segura, natural y persuasiva. "
-        "Ritmo medio, dicción clara, tono serio pero cercano. "
+        "Ritmo medio, diccion clara, tono serio pero cercano. "
         "Estilo mentor invisible."
     ),
 )
-
 LANGUAGE = os.getenv("QWEN_TTS_LANGUAGE", "Spanish")
 OVERWRITE = os.getenv("QWEN_TTS_OVERWRITE", "false").lower() == "true"
-
-# auto | cuda | cpu
 DEVICE_MODE = os.getenv("QWEN_TTS_DEVICE", "auto").lower()
-
-# true | false
 TEST_SHORT_TEXT = os.getenv("QWEN_TTS_TEST_SHORT", "false").lower() == "true"
+USE_FLASH_ATTN = os.getenv("QWEN_TTS_USE_FLASH_ATTN", "false").lower() == "true"
 
-# true | false
-USE_FLASH_ATTN = os.getenv("QWEN_TTS_USE_FLASH_ATTN",
-                           "false").lower() == "true"
 
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def safe_read_json(path: Path, default=None):
+    if not path.exists():
+        return default
+    with path.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def safe_write_json(path: Path, data) -> None:
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
+
+
+def load_job_status(status_path: Path) -> dict:
+    current = safe_read_json(status_path, default={}) or {}
+    defaults = {
+        "brief_created": False,
+        "script_generated": False,
+        "audio_generated": False,
+        "subtitles_generated": False,
+        "visual_manifest_generated": False,
+        "export_ready": False,
+        "last_step": "created",
+        "updated_at": "",
+    }
+    defaults.update(current)
+    defaults["export_ready"] = bool(
+        defaults["brief_created"]
+        and defaults["script_generated"]
+        and defaults["audio_generated"]
+        and defaults["subtitles_generated"]
+        and defaults["visual_manifest_generated"]
+    )
+    return defaults
+
+
+def update_status(status_path: Path, **changes) -> dict:
+    status = load_job_status(status_path)
+    status.update(changes)
+    status["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    status["export_ready"] = bool(
+        status["brief_created"]
+        and status["script_generated"]
+        and status["audio_generated"]
+        and status["subtitles_generated"]
+        and status["visual_manifest_generated"]
+    )
+    safe_write_json(status_path, status)
+    return status
 
 
 def resolve_model_path(base_path: str) -> str:
-    """
-    Acepta:
-    - model id HF => se devuelve tal cual
-    - directorio local con config.json => se devuelve tal cual
-    - raíz del cache HF => resuelve el snapshot más reciente con config.json
-    """
-    # Si parece model id HF, no tocarlo
     if "/" in base_path and not base_path.startswith("/"):
-        print(f"✔ Usando model id HF: {base_path}")
+        print(f"Usando model id HF: {base_path}")
         return base_path
 
     base = Path(base_path)
-
     if not base.exists():
         raise RuntimeError(f"No existe la ruta base del modelo: {base}")
 
     if (base / "config.json").exists():
-        print(f"✔ Usando modelo directo: {base}")
+        print(f"Usando modelo directo: {base}")
         return str(base)
 
     snapshots_dir = base / "snapshots"
@@ -78,50 +106,35 @@ def resolve_model_path(base_path: str) -> str:
         raise RuntimeError(f"No existe la carpeta snapshots en: {base}")
 
     snapshots = sorted(
-        [p for p in snapshots_dir.iterdir() if p.is_dir()],
-        key=lambda p: p.stat().st_mtime,
+        [path for path in snapshots_dir.iterdir() if path.is_dir()],
+        key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
 
-    for snap in snapshots:
-        if (snap / "config.json").exists():
-            print(f"✔ Snapshot detectado: {snap}")
-            return str(snap)
+    for snapshot in snapshots:
+        if (snapshot / "config.json").exists():
+            print(f"Snapshot detectado: {snapshot}")
+            return str(snapshot)
 
-    raise RuntimeError(
-        f"No se encontró snapshot válido con config.json en: {snapshots_dir}")
-
-
-def load_items():
-    if not INPUT_JSON.exists():
-        raise FileNotFoundError(f"No existe el archivo: {INPUT_JSON}")
-
-    with INPUT_JSON.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if not isinstance(data, list):
-        raise ValueError("scripts.json no contiene una lista válida")
-
-    return data
+    raise RuntimeError(f"No se encontro snapshot valido con config.json en: {snapshots_dir}")
 
 
 def get_device_and_dtype():
     if DEVICE_MODE == "cpu":
-        print("⚠ Usando CPU (forzado por QWEN_TTS_DEVICE=cpu)")
+        print("Usando CPU por configuracion")
         return "cpu", torch.float32
 
     if DEVICE_MODE == "cuda":
         if not torch.cuda.is_available():
-            raise RuntimeError(
-                "QWEN_TTS_DEVICE=cuda pero torch.cuda.is_available() es False")
-        print("🚀 Usando GPU (forzado por QWEN_TTS_DEVICE=cuda)")
+            raise RuntimeError("QWEN_TTS_DEVICE=cuda pero CUDA no esta disponible")
+        print("Usando GPU por configuracion")
         return "cuda:0", torch.float16
 
     if torch.cuda.is_available():
-        print("🚀 Usando GPU (auto)")
+        print("Usando GPU en modo auto")
         return "cuda:0", torch.float16
 
-    print("⚠ Usando CPU (auto fallback)")
+    print("Usando CPU en modo auto")
     return "cpu", torch.float32
 
 
@@ -137,52 +150,28 @@ def load_model():
 
     kwargs = {
         "device_map": device_map,
-        "dtype": dtype,  # docs y runtime actual prefieren dtype
+        "dtype": dtype,
         "trust_remote_code": True,
         "low_cpu_mem_usage": True,
     }
-
-    # FlashAttention 2 es recomendado por el repo para reducir VRAM,
-    # pero lo dejamos opt-in para no romper el entorno si no está instalado.
     if USE_FLASH_ATTN and str(device_map).startswith("cuda"):
         kwargs["attn_implementation"] = "flash_attention_2"
 
-    print(f"📦 Cargando modelo desde: {model_path}")
-    print(
-        f"📦 device_map={device_map}, dtype={dtype}, flash_attn={USE_FLASH_ATTN}")
-
-    try:
-        model = Qwen3TTSModel.from_pretrained(model_path, **kwargs)
-        # NO usar model.eval(): este wrapper puede no exponer ese método
-    except Exception:
-        print("❌ Error cargando el modelo:")
-        traceback.print_exc()
-        raise
-
-    return model
+    print(f"Cargando modelo desde: {model_path}")
+    print(f"device_map={device_map}, dtype={dtype}, flash_attn={USE_FLASH_ATTN}")
+    return Qwen3TTSModel.from_pretrained(model_path, **kwargs)
 
 
-def sanitize_text(text: str) -> str:
-    return " ".join(str(text).split()).strip()
+def iter_job_dirs():
+    if not JOBS_DIR.exists():
+        return []
+    return sorted(path for path in JOBS_DIR.iterdir() if path.is_dir())
 
 
-def build_fallback_narracion(script: dict) -> str:
-    partes = [
-        script.get("hook", ""),
-        script.get("problema", ""),
-        script.get("explicacion", ""),
-        *script.get("solucion", []),
-        script.get("cierre", ""),
-        script.get("cta", ""),
-    ]
-    return sanitize_text(". ".join([str(p) for p in partes if str(p).strip()]))
-
-
-def get_script_text(script: dict) -> str:
-    narracion = sanitize_text(script.get("narracion", ""))
-    if narracion:
-        return narracion
-    return build_fallback_narracion(script)
+def get_script_text(job_dir: Path) -> str:
+    script_path = job_dir / "script.json"
+    script_data = safe_read_json(script_path, default={}) or {}
+    return " ".join(str(script_data.get("guion_narrado", "")).split()).strip()
 
 
 def generate_one(model, text: str):
@@ -194,61 +183,48 @@ def generate_one(model, text: str):
 
 
 def main():
-    items = load_items()
+    job_dirs = iter_job_dirs()
+    if not job_dirs:
+        print("No hay jobs para procesar en jobs/")
+        return
+
     model = load_model()
 
     if TEST_SHORT_TEXT:
-        print("🧪 Modo test corto activado")
-        short_text = "Probando sistema de audio."
-        wavs, sr = generate_one(model, short_text)
-        test_wav = OUTPUT_DIR / "test_short.wav"
-        sf.write(str(test_wav), wavs[0], sr)
-        print(f"🧪 Test OK -> {test_wav}")
+        wavs, sample_rate = generate_one(model, "Probando sistema de audio.")
+        test_file = PROJECT_DIR / "jobs" / "test_short.wav"
+        sf.write(str(test_file), wavs[0], sample_rate)
+        print(f"Test corto completado en {test_file}")
         return
 
-    for item in items:
-        if item.get("estado") != "done":
-            continue
-
-        item_id = str(item.get("id", "")).strip()
-        script = item.get("script", {})
-
-        if not item_id:
-            print("⚠ Saltando item sin id")
-            continue
-
-        text = get_script_text(script)
-
-        if not text:
-            print(f"[{item_id}] No hay narración, se omite")
-            continue
-
-        output_wav = OUTPUT_DIR / f"{item_id}.wav"
+    for job_dir in job_dirs:
+        job_id = job_dir.name
+        status_path = job_dir / "status.json"
+        output_wav = job_dir / "audio" / "narration.wav"
 
         if output_wav.exists() and not OVERWRITE:
-            print(f"[{item_id}] Ya existe {output_wav.name}, se omite")
+            print(f"[{job_id}] narration.wav ya existe, se omite")
+            update_status(status_path, audio_generated=True, last_step="audio_skipped")
             continue
 
-        print(f"[{item_id}] Generando audio...")
-        print(f"[{item_id}] Texto: {text[:140]}{'...' if len(text) > 140 else ''}")
+        text = get_script_text(job_dir)
+        if not text:
+            print(f"[{job_id}] script.json sin guion_narrado, se omite")
+            update_status(status_path, audio_generated=False, last_step="audio_missing_script")
+            continue
 
+        print(f"[{job_id}] Generando audio")
         try:
-            wavs, sr = generate_one(model, text)
+            wavs, sample_rate = generate_one(model, text)
+            output_wav.parent.mkdir(parents=True, exist_ok=True)
+            sf.write(str(output_wav), wavs[0], sample_rate)
+            update_status(status_path, audio_generated=True, last_step="audio_generated")
         except Exception:
-            print(f"❌ Error generando audio para item {item_id}:")
+            print(f"[{job_id}] Error generando audio")
             traceback.print_exc()
-            continue
+            update_status(status_path, audio_generated=False, last_step="audio_error")
 
-        try:
-            sf.write(str(output_wav), wavs[0], sr)
-        except Exception:
-            print(f"❌ Error guardando WAV para item {item_id}:")
-            traceback.print_exc()
-            continue
-
-        print(f"[{item_id}] OK -> {output_wav}")
-
-    print("🎧 Audio completado.")
+    print("Audio completado")
 
 
 if __name__ == "__main__":
