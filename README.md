@@ -252,3 +252,8 @@ Uso recomendado del repo visual:
 $env:NC_OVERWRITE_SCRIPT="true"
 $env:NC_OVERWRITE_MANIFEST="true"
 & C:\Users\vhgal\AppData\Local\Python\pythoncore-3.14-64\python.exe c:/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine/main.py
+
+
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
+chmod +x wsl/run_subs.sh
+bash wsl/run_subs.sh

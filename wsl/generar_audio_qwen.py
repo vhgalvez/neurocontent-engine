@@ -1,3 +1,4 @@
+# wsl\generar_audio_qwen.py
 import json
 import os
 import traceback

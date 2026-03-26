@@ -13,7 +13,10 @@ JOBS_DIR = PROJECT_DIR / "jobs"
 # The downstream visual repository should consume jobs/<id>/subtitles/narration.srt
 # as the caption and timing reference aligned with the generated narration audio.
 
-WHISPERX_BIN = os.getenv("WHISPERX_BIN", str(Path.home() / "whisperx-venv" / "bin" / "whisperx"))
+WHISPERX_BIN = os.getenv(
+    "WHISPERX_BIN",
+    str(Path.home() / "miniconda3" / "envs" / "whisperx" / "bin" / "whisperx"),
+)
 WHISPER_MODEL = os.getenv("WHISPERX_MODEL", "medium")
 LANGUAGE = os.getenv("WHISPERX_LANGUAGE", "es")
 DEVICE = os.getenv("WHISPERX_DEVICE", "cuda")
@@ -78,8 +81,14 @@ def iter_job_dirs():
 
 
 def main():
-    if not Path(WHISPERX_BIN).exists():
-        raise FileNotFoundError(f"No existe WHISPERX_BIN: {WHISPERX_BIN}")
+    whisperx_path = Path(WHISPERX_BIN)
+
+    if not whisperx_path.exists():
+        raise FileNotFoundError(
+            f"No existe WHISPERX_BIN: {WHISPERX_BIN}\n"
+            "Crea el entorno conda 'whisperx' o exporta una ruta valida, por ejemplo:\n"
+            "export WHISPERX_BIN=/home/victory/miniconda3/envs/whisperx/bin/whisperx"
+        )
 
     job_dirs = iter_job_dirs()
     if not job_dirs:
@@ -94,18 +103,26 @@ def main():
 
         if not wav_path.exists():
             print(f"[{job_id}] narration.wav no existe, se omite")
-            update_status(status_path, subtitles_generated=False, last_step="subs_missing_audio")
+            update_status(
+                status_path,
+                subtitles_generated=False,
+                last_step="subs_missing_audio",
+            )
             continue
 
         if srt_path.exists() and not OVERWRITE:
             print(f"[{job_id}] narration.srt ya existe, se omite")
-            update_status(status_path, subtitles_generated=True, last_step="subs_skipped")
+            update_status(
+                status_path,
+                subtitles_generated=True,
+                last_step="subs_skipped",
+            )
             continue
 
         srt_path.parent.mkdir(parents=True, exist_ok=True)
 
         cmd = [
-            WHISPERX_BIN,
+            str(whisperx_path),
             str(wav_path),
             "--model", WHISPER_MODEL,
             "--language", LANGUAGE,
@@ -119,14 +136,22 @@ def main():
         try:
             subprocess.run(cmd, check=True)
         except subprocess.CalledProcessError:
-            update_status(status_path, subtitles_generated=False, last_step="subtitles_error")
+            update_status(
+                status_path,
+                subtitles_generated=False,
+                last_step="subtitles_error",
+            )
             raise
 
         generated_name = srt_path.parent / f"{wav_path.stem}.srt"
         if generated_name.exists() and generated_name != srt_path:
             generated_name.replace(srt_path)
 
-        update_status(status_path, subtitles_generated=srt_path.exists(), last_step="subtitles_generated")
+        update_status(
+            status_path,
+            subtitles_generated=srt_path.exists(),
+            last_step="subtitles_generated",
+        )
 
     print("Subtitulos completados")
 
