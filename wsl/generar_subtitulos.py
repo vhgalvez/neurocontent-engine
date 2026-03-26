@@ -9,18 +9,22 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 JOBS_DIR = PROJECT_DIR / "jobs"
 
-# This repository stops at subtitle generation.
-# The downstream visual repository should consume jobs/<id>/subtitles/narration.srt
-# as the caption and timing reference aligned with the generated narration audio.
-
-WHISPERX_BIN = os.getenv(
-    "WHISPERX_BIN",
-    str(Path.home() / "miniconda3" / "envs" / "whisperx" / "bin" / "whisperx"),
+WHISPERX_PYTHON = os.getenv(
+    "WHISPERX_PYTHON",
+    str(Path.home() / "miniconda3" / "envs" / "whisperx" / "bin" / "python"),
 )
+
 WHISPER_MODEL = os.getenv("WHISPERX_MODEL", "medium")
 LANGUAGE = os.getenv("WHISPERX_LANGUAGE", "es")
+
+# Modo preferido
 DEVICE = os.getenv("WHISPERX_DEVICE", "cuda")
 COMPUTE_TYPE = os.getenv("WHISPERX_COMPUTE_TYPE", "float16")
+
+# Fallback
+FALLBACK_DEVICE = os.getenv("WHISPERX_FALLBACK_DEVICE", "cpu")
+FALLBACK_COMPUTE_TYPE = os.getenv("WHISPERX_FALLBACK_COMPUTE_TYPE", "float32")
+
 OVERWRITE = os.getenv("WHISPERX_OVERWRITE", "false").lower() == "true"
 
 
@@ -62,8 +66,7 @@ def load_job_status(status_path: Path) -> dict:
 def update_status(status_path: Path, **changes) -> dict:
     status = load_job_status(status_path)
     status.update(changes)
-    status["updated_at"] = datetime.now(
-        timezone.utc).replace(microsecond=0).isoformat()
+    status["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     status["export_ready"] = bool(
         status["brief_created"]
         and status["script_generated"]
@@ -81,14 +84,50 @@ def iter_job_dirs():
     return sorted(path for path in JOBS_DIR.iterdir() if path.is_dir())
 
 
-def main():
-    whisperx_path = Path(WHISPERX_BIN)
+def build_cmd(
+    python_bin: str,
+    wav_path: Path,
+    output_dir: Path,
+    device: str,
+    compute_type: str,
+):
+    return [
+        python_bin,
+        "-m",
+        "whisperx",
+        str(wav_path),
+        "--model", WHISPER_MODEL,
+        "--language", LANGUAGE,
+        "--device", device,
+        "--compute_type", compute_type,
+        "--output_format", "srt",
+        "--output_dir", str(output_dir),
+    ]
 
-    if not whisperx_path.exists():
+
+def run_whisperx(cmd: list[str]) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True, (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stdout or "") + ("\n" + exc.stderr if exc.stderr else "")
+        return False, output
+    except Exception as exc:
+        return False, str(exc)
+
+
+def main():
+    python_path = Path(WHISPERX_PYTHON)
+
+    if not python_path.exists():
         raise FileNotFoundError(
-            f"No existe WHISPERX_BIN: {WHISPERX_BIN}\n"
-            "Crea el entorno conda 'whisperx' o exporta una ruta valida, por ejemplo:\n"
-            "export WHISPERX_BIN=/home/victory/miniconda3/envs/whisperx/bin/whisperx"
+            f"No existe WHISPERX_PYTHON: {WHISPERX_PYTHON}\n"
+            "Asegúrate de tener el entorno whisperx creado correctamente."
         )
 
     job_dirs = iter_job_dirs()
@@ -122,27 +161,40 @@ def main():
 
         srt_path.parent.mkdir(parents=True, exist_ok=True)
 
-        cmd = [
-            str(whisperx_path),
-            str(wav_path),
-            "--model", WHISPER_MODEL,
-            "--language", LANGUAGE,
-            "--device", DEVICE,
-            "--compute_type", COMPUTE_TYPE,
-            "--output_format", "srt",
-            "--output_dir", str(srt_path.parent),
-        ]
+        print(f"[{job_id}] Intentando subtítulos con {DEVICE}/{COMPUTE_TYPE}")
+        cmd = build_cmd(
+            python_bin=str(python_path),
+            wav_path=wav_path,
+            output_dir=srt_path.parent,
+            device=DEVICE,
+            compute_type=COMPUTE_TYPE,
+        )
 
-        print(f"[{job_id}] Generando subtitulos")
-        try:
-            subprocess.run(cmd, check=True)
-        except subprocess.CalledProcessError:
-            update_status(
-                status_path,
-                subtitles_generated=False,
-                last_step="subtitles_error",
+        ok, output = run_whisperx(cmd)
+
+        if not ok:
+            print(f"[{job_id}] Falló en modo principal. Intentando fallback {FALLBACK_DEVICE}/{FALLBACK_COMPUTE_TYPE}")
+            if output.strip():
+                print(output[-3000:])
+
+            fallback_cmd = build_cmd(
+                python_bin=str(python_path),
+                wav_path=wav_path,
+                output_dir=srt_path.parent,
+                device=FALLBACK_DEVICE,
+                compute_type=FALLBACK_COMPUTE_TYPE,
             )
-            raise
+            ok, fallback_output = run_whisperx(fallback_cmd)
+
+            if not ok:
+                if fallback_output.strip():
+                    print(fallback_output[-3000:])
+                update_status(
+                    status_path,
+                    subtitles_generated=False,
+                    last_step="subtitles_error",
+                )
+                raise RuntimeError(f"[{job_id}] WhisperX falló en modo principal y fallback.")
 
         generated_name = srt_path.parent / f"{wav_path.stem}.srt"
         if generated_name.exists() and generated_name != srt_path:
@@ -153,8 +205,9 @@ def main():
             subtitles_generated=srt_path.exists(),
             last_step="subtitles_generated",
         )
+        print(f"[{job_id}] OK -> {srt_path}")
 
-    print("Subtitulos completados")
+    print("Subtítulos completados")
 
 
 if __name__ == "__main__":

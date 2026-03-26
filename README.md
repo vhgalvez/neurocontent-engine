@@ -257,3 +257,5 @@ $env:NC_OVERWRITE_MANIFEST="true"
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 chmod +x wsl/run_subs.sh
 bash wsl/run_subs.sh
+
+ ls -1 /mnt/d/AI_Models/huggingface/hub | grep "models--Qwen--Qwen3-TTS"
