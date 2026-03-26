@@ -1,3 +1,4 @@
+# config.py
 import os
 from pathlib import Path
 
@@ -12,12 +13,13 @@ INDEX_FILE = DATA_DIR / "index.csv"
 JOB_ID_WIDTH = 6
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "qwen2.5:7b"
+
+MODEL = "qwen3:8b"
 
 OPTIONS = {
-    "num_ctx": 2048,
-    "num_predict": 700,
-    "temperature": 0.72,
+    "num_ctx": 4096,
+    "num_predict": 900,
+    "temperature": 0.78,
     "top_p": 0.9,
 }
 
