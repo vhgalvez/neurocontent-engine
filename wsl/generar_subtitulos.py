@@ -62,7 +62,8 @@ def load_job_status(status_path: Path) -> dict:
 def update_status(status_path: Path, **changes) -> dict:
     status = load_job_status(status_path)
     status.update(changes)
-    status["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    status["updated_at"] = datetime.now(
+        timezone.utc).replace(microsecond=0).isoformat()
     status["export_ready"] = bool(
         status["brief_created"]
         and status["script_generated"]
