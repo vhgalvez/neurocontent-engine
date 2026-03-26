@@ -1,8 +1,8 @@
 # wsl\generar_audio_qwen.py
-
 import json
 import os
 import random
+import sys
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -76,6 +76,10 @@ VOICE_PRESETS = {
 }
 
 
+def log(msg: str):
+    print(msg, flush=True)
+
+
 def safe_read_json(path: Path, default=None):
     if not path.exists():
         return default
@@ -131,16 +135,13 @@ def update_status(status_path: Path, **changes) -> dict:
 
 
 def resolve_model_path(base_path: str) -> str:
-    if "/" in base_path and not base_path.startswith("/"):
-        print(f"Usando model id HF: {base_path}")
-        return base_path
-
     base = Path(base_path)
+
     if not base.exists():
         raise RuntimeError(f"No existe la ruta base del modelo: {base}")
 
     if (base / "config.json").exists():
-        print(f"Usando modelo directo: {base}")
+        log(f"Usando modelo directo: {base}")
         return str(base)
 
     snapshots_dir = base / "snapshots"
@@ -155,7 +156,7 @@ def resolve_model_path(base_path: str) -> str:
 
     for snapshot in snapshots:
         if (snapshot / "config.json").exists():
-            print(f"Snapshot detectado: {snapshot}")
+            log(f"Snapshot detectado: {snapshot}")
             return str(snapshot)
 
     raise RuntimeError(f"No se encontró snapshot válido con config.json en: {snapshots_dir}")
@@ -163,25 +164,25 @@ def resolve_model_path(base_path: str) -> str:
 
 def get_device_and_dtype():
     if DEVICE_MODE == "cpu":
-        print("Usando CPU por configuración")
+        log("Usando CPU por configuración")
         return "cpu", torch.float32
 
     if DEVICE_MODE == "cuda":
         if not torch.cuda.is_available():
             raise RuntimeError("QWEN_TTS_DEVICE=cuda pero CUDA no está disponible")
-        print("Usando GPU por configuración")
+        log("Usando GPU por configuración")
         return "cuda:0", torch.float16
 
     if torch.cuda.is_available():
-        print("Usando GPU en modo auto")
+        log("Usando GPU en modo auto")
         return "cuda:0", torch.float16
 
-    print("Usando CPU en modo auto")
+    log("Usando CPU en modo auto")
     return "cpu", torch.float32
 
 
 def set_global_seed(seed: int):
-    print(f"Aplicando seed: {seed}")
+    log(f"Aplicando seed: {seed}")
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -217,9 +218,11 @@ def load_model():
     if USE_FLASH_ATTN and str(device_map).startswith("cuda"):
         kwargs["attn_implementation"] = "flash_attention_2"
 
-    print(f"Cargando modelo desde: {model_path}")
-    print(f"device_map={device_map}, dtype={dtype}, flash_attn={USE_FLASH_ATTN}")
+    log(f"Cargando modelo desde: {model_path}")
+    log(f"device_map={device_map}, dtype={dtype}, flash_attn={USE_FLASH_ATTN}")
+
     model = Qwen3TTSModel.from_pretrained(model_path, **kwargs)
+    log("Modelo cargado correctamente")
     return model, model_path
 
 
@@ -263,81 +266,92 @@ def build_voice_instruction(job_voice_config: dict) -> tuple[str, str, int]:
 
 
 def generate_one(model, text: str, instruct: str):
-    return model.generate_voice_design(
+    log("Entrando a generate_voice_design()")
+    wavs, sample_rate = model.generate_voice_design(
         text=text,
         language=LANGUAGE,
         instruct=instruct,
     )
+    log("generate_voice_design() completado")
+    return wavs, sample_rate
 
 
 def main():
-    job_dirs = iter_job_dirs()
-    if not job_dirs:
-        print("No hay jobs para procesar en jobs/")
-        return
+    try:
+        job_dirs = iter_job_dirs()
+        if not job_dirs:
+            log("No hay jobs para procesar en jobs/")
+            return
 
-    model, resolved_model_path = load_model()
+        log(f"Jobs detectados: {[p.name for p in job_dirs]}")
+        model, resolved_model_path = load_model()
 
-    if TEST_SHORT_TEXT:
-        preset = VOICE_PRESETS.get(VOICE_PRESET, VOICE_PRESETS["mujer_podcast_seria_35_45"])
-        instruct = f"{preset['identity']} {preset['style']} Mantener identidad vocal consistente."
-        set_global_seed(VOICE_SEED)
-        wavs, sample_rate = generate_one(model, "Probando sistema de audio.", instruct)
-        test_file = PROJECT_DIR / "jobs" / "test_short.wav"
-        sf.write(str(test_file), wavs[0], sample_rate)
-        print(f"Test corto completado en {test_file}")
-        return
+        if TEST_SHORT_TEXT:
+            preset = VOICE_PRESETS.get(VOICE_PRESET, VOICE_PRESETS["mujer_podcast_seria_35_45"])
+            instruct = f"{preset['identity']} {preset['style']} Mantener identidad vocal consistente."
+            set_global_seed(VOICE_SEED)
+            wavs, sample_rate = generate_one(model, "Probando sistema de audio.", instruct)
+            test_file = PROJECT_DIR / "jobs" / "test_short.wav"
+            sf.write(str(test_file), wavs[0], sample_rate)
+            log(f"Test corto completado en {test_file}")
+            return
 
-    for job_dir in job_dirs:
-        job_id = job_dir.name
-        status_path = job_dir / "status.json"
-        output_wav = job_dir / "audio" / "narration.wav"
+        for job_dir in job_dirs:
+            job_id = job_dir.name
+            status_path = job_dir / "status.json"
+            output_wav = job_dir / "audio" / "narration.wav"
 
-        if output_wav.exists() and not OVERWRITE:
-            print(f"[{job_id}] narration.wav ya existe, se omite")
-            update_status(
-                status_path,
-                audio_generated=True,
-                last_step="audio_skipped",
-                voice_model_path=resolved_model_path,
-            )
-            continue
+            if output_wav.exists() and not OVERWRITE:
+                log(f"[{job_id}] narration.wav ya existe, se omite")
+                update_status(
+                    status_path,
+                    audio_generated=True,
+                    last_step="audio_skipped",
+                    voice_model_path=resolved_model_path,
+                )
+                continue
 
-        text = get_script_text(job_dir)
-        if not text:
-            print(f"[{job_id}] script.json sin guion_narrado, se omite")
-            update_status(status_path, audio_generated=False, last_step="audio_missing_script")
-            continue
+            text = get_script_text(job_dir)
+            if not text:
+                log(f"[{job_id}] script.json sin guion_narrado, se omite")
+                update_status(status_path, audio_generated=False, last_step="audio_missing_script")
+                continue
 
-        print(f"[{job_id}] Generando audio")
-        try:
-            job_voice_config = get_job_voice_config(job_dir)
-            preset_name, instruct, seed = build_voice_instruction(job_voice_config)
+            log(f"[{job_id}] Generando audio")
+            try:
+                job_voice_config = get_job_voice_config(job_dir)
+                preset_name, instruct, seed = build_voice_instruction(job_voice_config)
 
-            print(f"[{job_id}] preset={preset_name}")
-            print(f"[{job_id}] seed={seed}")
+                log(f"[{job_id}] preset={preset_name}")
+                log(f"[{job_id}] seed={seed}")
+                log(f"[{job_id}] longitud texto={len(text)}")
 
-            set_global_seed(seed)
+                set_global_seed(seed)
 
-            wavs, sample_rate = generate_one(model, text, instruct)
-            output_wav.parent.mkdir(parents=True, exist_ok=True)
-            sf.write(str(output_wav), wavs[0], sample_rate)
+                wavs, sample_rate = generate_one(model, text, instruct)
+                output_wav.parent.mkdir(parents=True, exist_ok=True)
+                sf.write(str(output_wav), wavs[0], sample_rate)
 
-            update_status(
-                status_path,
-                audio_generated=True,
-                last_step="audio_generated",
-                voice_preset=preset_name,
-                voice_seed=seed,
-                voice_model_path=resolved_model_path,
-            )
+                update_status(
+                    status_path,
+                    audio_generated=True,
+                    last_step="audio_generated",
+                    voice_preset=preset_name,
+                    voice_seed=seed,
+                    voice_model_path=resolved_model_path,
+                )
 
-        except Exception:
-            print(f"[{job_id}] Error generando audio")
-            traceback.print_exc()
-            update_status(status_path, audio_generated=False, last_step="audio_error")
+            except Exception:
+                log(f"[{job_id}] Error generando audio")
+                traceback.print_exc()
+                update_status(status_path, audio_generated=False, last_step="audio_error")
 
-    print("Audio completado")
+        log("Audio completado")
+
+    except Exception:
+        log("Fallo general en el módulo de audio")
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
