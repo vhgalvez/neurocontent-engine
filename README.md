@@ -126,4 +126,19 @@ El README ya refleja eso correctamente:
 
 ---
 
-## 10. 📞 Contacto
+## 10. modelos TTS - solución de problemas OOM
+
+1. Primero: test corto con GPU
+export QWEN_TTS_TEST_SHORT=true
+export QWEN_TTS_DEVICE=cuda
+bash wsl/run_wsl_pipeline.sh
+2. Si 1.7B-VoiceDesign sigue haciendo OOM, cambia a 1.7B-Base
+export QWEN_TTS_MODEL_PATH="/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-Base"
+export QWEN_TTS_TEST_SHORT=true
+export QWEN_TTS_DEVICE=cuda
+bash wsl/run_wsl_pipeline.sh
+3. Si todavía falla, baja a 0.6B-Base
+export QWEN_TTS_MODEL_PATH="/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-0.6B-Base"
+export QWEN_TTS_TEST_SHORT=true
+export QWEN_TTS_DEVICE=cuda
+bash wsl/run_wsl_pipeline.sh
