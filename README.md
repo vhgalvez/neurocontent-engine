@@ -259,3 +259,36 @@ chmod +x wsl/run_subs.sh
 bash wsl/run_subs.sh
 
  ls -1 /mnt/d/AI_Models/huggingface/hub | grep "models--Qwen--Qwen3-TTS"
+
+
+# Reinstalación limpia de WhisperX (CPU → GPU)
+
+## 1. Borrar entorno previo
+
+```bash
+conda deactivate
+conda env remove -p /home/victory/conda-envs/whisperx_clean
+mkdir -p /home/victory/conda-envs
+
+conda create --no-default-packages \
+  -p /home/victory/conda-envs/whisperx_clean \
+  python=3.10 pip -y
+
+conda activate /home/victory/conda-envs/whisperx_clean
+python -m pip install --upgrade pip setuptools wheel
+unset PYTHONPATH
+pip install torch==2.3.1+cu121 \
+  torchaudio==2.3.1 \
+  --index-url https://download.pytorch.org/whl/cu121
+  
+python -c "
+import torch
+print(torch.__version__)
+print('cuda:', torch.cuda.is_available())
+print('gpu:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO')
+" 
+
+bash wsl/run_subs.sh
+
+Si quieres forzar regeneración:
+WHISPERX_OVERWRITE=true bash wsl/run_subs.sh

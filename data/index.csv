@@ -1,4 +1,4 @@
 job_id,source_id,estado_csv,idea_central,platform,language,brief_created,script_generated,audio_generated,subtitles_generated,visual_manifest_generated,export_ready,last_step,updated_at
-000001,1,pending,trabajar duro no te hará rico,tiktok,es,True,True,False,False,True,False,visual_manifest_generated,2026-03-26T08:51:39+00:00
-000002,2,pending,el error invisible que vacía tu cuenta,reels,es,True,True,False,False,True,False,visual_manifest_generated,2026-03-26T08:51:39+00:00
-000003,3,pending,la diferencia real entre pobre y rico,shorts,es,True,True,False,False,True,False,visual_manifest_generated,2026-03-26T08:51:39+00:00
+000001,1,pending,trabajar duro no te hará rico,tiktok,es,True,True,True,False,True,False,manifest_reused,2026-03-26T13:48:39+00:00
+000002,2,pending,el error invisible que vacía tu cuenta,reels,es,True,True,True,False,True,False,manifest_reused,2026-03-26T13:48:39+00:00
+000003,3,pending,la diferencia real entre pobre y rico,shorts,es,True,True,True,False,True,False,manifest_reused,2026-03-26T13:48:39+00:00
