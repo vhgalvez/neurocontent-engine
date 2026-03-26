@@ -1,239 +1,460 @@
-# AUDIO GUIDE
+# AUDIO GUIDE v2
 
 ## 1. Objetivo del módulo de audio
 
-Este proyecto tiene dos flujos de voz:
+Este proyecto tiene **dos flujos reales** de audio, verificados contra el código actual en:
+
+- `wsl/generar_audio_qwen.py`
+- `wsl/design_voice.py`
+- `wsl/generate_audio_from_prompt.py`
+- `wsl/run_audio.sh`
+- `wsl/run_design_voice.sh`
+- `wsl/run_generate_audio_from_prompt.sh`
+
+Los dos flujos son:
 
 1. **Flujo rápido con VoiceDesign**
    - Diseñas la voz con lenguaje natural.
    - Generas audio directamente.
-   - Es rápido y práctico.
-   - La consistencia es buena, pero no es la máxima posible entre muchos clips largos.
+   - Es el flujo más simple para pruebas rápidas o jobs directos.
 
 2. **Flujo profesional con VoiceDesign + Base**
    - Diseñas una voz de referencia.
    - Generas `reference.wav`.
    - Creas un `voice_clone_prompt`.
-   - Reutilizas esa misma identidad vocal en muchos clips.
-   - Este es el flujo correcto si quieres una voz más estable y consistente.
+   - Reutilizas la misma identidad vocal en muchos clips.
 
 ---
 
 ## 2. Diferencia entre VoiceDesign, CustomVoice y Base
 
-### VoiceDesign
-- Modelo: `Qwen3-TTS-12Hz-1.7B-VoiceDesign`
-- Caso correcto: describir la voz con lenguaje natural
-- Método: `generate_voice_design(...)`
-- Uso en este proyecto:
+### 2.1. VoiceDesign
+
+- Modelo:
+  - `Qwen3-TTS-12Hz-1.7B-VoiceDesign`
+- Método oficial usado:
+  - `generate_voice_design(...)`
+- Casos de uso:
+  - describir una voz con lenguaje natural
+  - generar pruebas rápidas
+  - generar audio directo por job
+- Scripts del proyecto que lo usan:
   - `wsl/generar_audio_qwen.py`
   - `wsl/design_voice.py`
 
-### CustomVoice
-- Modelo: `Qwen3-TTS-12Hz-1.7B-CustomVoice`
-- Caso correcto: usar voces predefinidas del modelo
-- Método: `generate_custom_voice(...)`
-- En este proyecto **no se usa** como flujo principal
-- Motivo:
-  - el objetivo aquí es diseñar una voz propia con lenguaje natural
-  - no mezclar `CustomVoice` con `generate_voice_design(...)`
+### 2.2. CustomVoice
 
-### Base
-- Modelo: `Qwen3-TTS-12Hz-1.7B-Base`
-- Caso correcto: clonar y reutilizar una voz desde una referencia
-- Métodos:
+- Modelo disponible localmente:
+  - `Qwen3-TTS-12Hz-1.7B-CustomVoice`
+- Flujo teórico:
+  - voces predefinidas del modelo
+- Estado en este proyecto:
+  - **no se usa como flujo principal**
+- Regla importante:
+  - **no mezclar `CustomVoice` con `generate_voice_design(...)`**
+
+### 2.3. Base
+
+- Modelo:
+  - `Qwen3-TTS-12Hz-1.7B-Base`
+- Métodos oficiales usados:
   - `create_voice_clone_prompt(...)`
   - `generate_voice_clone(...)`
-- Uso en este proyecto:
+- Casos de uso:
+  - reutilizar la misma voz entre muchos clips
+  - guardar un prompt de clonación reutilizable
+- Script del proyecto que lo usa:
   - `wsl/generate_audio_from_prompt.py`
 
 ---
 
-## 3. Cuándo usar cada uno
+## 3. Cuándo usar cada flujo
 
-### Usa VoiceDesign cuando
+### 3.1. Usa VoiceDesign cuando
+
 - quieres describir la voz con texto natural
 - quieres una prueba rápida
-- quieres ajustar el carácter de la voz
-- quieres generar audio directo sin pasar por clonación
+- quieres generar audio directo sin clonado
+- quieres mantener presets y seed por job
 
-### Usa Base cuando
+### 3.2. Usa Base cuando
+
 - ya tienes una voz de referencia
-- necesitas más consistencia entre muchos clips
-- quieres reutilizar la misma voz en varios jobs
-- quieres guardar y reutilizar `voice_clone_prompt.json`
+- quieres consistencia entre muchos clips
+- quieres guardar `voice_clone_prompt.json`
+- quieres reutilizar una misma voz en varios jobs
 
-### No uses CustomVoice cuando
+### 3.3. No uses CustomVoice cuando
+
 - tu objetivo es diseñar libremente una voz con descripción natural
-- quieres una voz tipo marca personal creada por ti
+- quieres mantener un flujo coherente con `VoiceDesign -> Base`
 
 ---
 
-## 4. Flujo actual inmediato del proyecto
+## 4. Resumen técnico verificado con el código
 
-### Archivo principal
-- `wsl/generar_audio_qwen.py`
+### 4.1. `wsl/generar_audio_qwen.py`
 
-### Qué hace ahora
+Hace esto:
+
 - usa `Qwen3-TTS-12Hz-1.7B-VoiceDesign`
+- resuelve snapshots válidos del modelo
+- usa `torch.bfloat16` en GPU
 - usa `generate_voice_design(...)`
-- usa `torch.bfloat16` cuando hay GPU
-- mantiene:
+- soporta:
   - presets
   - seed
-  - override por job con `jobs/<job_id>/voice.json`
+  - override por `jobs/<job_id>/voice.json`
   - actualización de `jobs/<job_id>/status.json`
+  - modo `--test-short`
+  - modo texto directo con `--text`
+  - modo jobs con `--job-id`
 
-### Override por job soportado
+### 4.2. `wsl/design_voice.py`
+
+Hace esto:
+
+- usa `Qwen3-TTS-12Hz-1.7B-VoiceDesign`
+- usa `generate_voice_design(...)`
+- genera una referencia corta
+- guarda:
+  - `assets/voices/<voice_name>/reference.wav`
+  - `assets/voices/<voice_name>/reference.txt`
+  - `assets/voices/<voice_name>/voice.json`
+
+### 4.3. `wsl/generate_audio_from_prompt.py`
+
+Hace esto:
+
+- usa `Qwen3-TTS-12Hz-1.7B-Base`
+- detecta métodos reales de la API con introspección
+- usa:
+  - `create_voice_clone_prompt(...)`
+  - `generate_voice_clone(...)`
+- soporta:
+  - modo directo con `--text`
+  - modo jobs con `--job-id`
+  - lectura desde `assets/voices/<voice_name>/reference.wav`
+  - lectura de metadata en `assets/voices/<voice_name>/voice.json`
+  - lectura opcional de `voice_clone_prompt.json`
+  - actualización de `status.json` en modo jobs
+
+### 4.4. Wrappers bash
+
+Los wrappers:
+
+- cargan `.env` si existe
+- cargan `wsl/voices.env` si existe
+- imprimen:
+  - proyecto
+  - python usado
+  - modelo usado
+  - device
+- validan que el Python exista
+- propagan correctamente el código de salida
+
+---
+
+## 5. Variables globales de configuración
+
+Archivo:
+
+```text
+wsl/voices.env
+```
+
+Contenido real relevante:
+
+```bash
+export QWEN_PYTHON="${QWEN_PYTHON:-$HOME/Qwen3-TTS/venv/bin/python}"
+
+# Flujo inmediato: VoiceDesign por descripcion natural.
+export QWEN_TTS_MODEL_PATH="/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+export QWEN_TTS_VOICE_PRESET="mujer_podcast_seria_35_45"
+export QWEN_TTS_SEED="424242"
+export QWEN_TTS_LANGUAGE="Spanish"
+export QWEN_TTS_DEVICE="auto"
+export QWEN_TTS_OVERWRITE="false"
+export QWEN_TTS_TEST_SHORT="false"
+export QWEN_TTS_TEST_TEXT="Probando sistema de audio con Qwen3 TTS."
+export QWEN_TTS_USE_FLASH_ATTN="false"
+
+# Flujo avanzado: disenar referencia con VoiceDesign y clonar con Base.
+export QWEN_TTS_BASE_MODEL_PATH="/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-Base"
+export QWEN_TTS_REFERENCE_ROOT="/mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine/assets/voices"
+export QWEN_TTS_REFERENCE_TEXT="Hola, esta es una referencia corta para conservar la misma identidad de voz en clips posteriores."
+export QWEN_TTS_REFERENCE_LANGUAGE="Spanish"
+export QWEN_TTS_REFERENCE_NAME="voz_principal"
+export QWEN_TTS_X_VECTOR_ONLY_MODE="false"
+```
+
+Regla práctica:
+
+- mismo preset + misma seed = más estabilidad
+- preset distinto = otra voz
+- seed distinta = variante de la misma voz
+
+---
+
+## 6. Flujo rápido con VoiceDesign
+
+### 6.1. ¿Qué hace?
+
+Este flujo usa:
+
+- modelo `VoiceDesign`
+- `generate_voice_design(...)`
+- presets de voz
+- seed
+- overrides por job
+
+### 6.2. Presets disponibles en el código
+
+Los presets definidos actualmente en `wsl/generar_audio_qwen.py` son:
+
+```text
+mujer_podcast_seria_35_45
+mujer_documental_neutra
+hombre_narrador_sobrio
+```
+
+### 6.3. Override por job
 
 Archivo:
 
 ```text
 jobs/<job_id>/voice.json
+```
 
 Ejemplo simple:
 
+```json
 {
   "voice_preset": "mujer_podcast_seria_35_45",
   "seed": 424242
 }
+```
 
 Ejemplo avanzado:
 
+```json
 {
   "voice_preset": "mujer_documental_neutra",
   "seed": 777777,
   "identity": "Voz femenina madura, sobria y natural.",
-  "style": "Ritmo calmado, dicción clara, tono documental.",
-  "voice_description": "Evitar tono juvenil. Mantener carácter profesional."
+  "style": "Ritmo calmado, diccion clara, tono documental.",
+  "voice_description": "Evitar tono juvenil. Mantener caracter profesional."
 }
-<!-- .md 1: Ejemplo avanzado, puedes agregar más campos según el modelo -->
-5. Cómo cambiar la voz global
+```
+
+### 6.4. Cambiar la voz global
 
 Editar:
 
+```text
 wsl/voices.env
-<!-- .md 2: Explica aquí cómo crear el archivo voices.env si no existe o qué hacer si falta alguna variable -->
+```
 
-Variables principales:
+Luego ejecutar:
 
-export QWEN_TTS_VOICE_PRESET="mujer_podcast_seria_35_45"
-export QWEN_TTS_SEED="424242"
-export QWEN_TTS_LANGUAGE="Spanish"
-export QWEN_TTS_DEVICE="auto"
-export QWEN_TTS_MODEL_PATH="/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign"
-Regla práctica
-mismo preset + misma seed = más estabilidad
-preset distinto = otra voz
-seed distinta = variante de la misma voz
-6. Cómo hacer una prueba corta
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
+bash wsl/run_audio.sh --job-id 000001 --overwrite
+```
 
-Desde la raíz del proyecto en WSL2:
+### 6.5. Prueba corta
 
+```bash
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_audio.sh --test-short
-<!-- .md 3: Asegúrate de tener permisos de ejecución en run_audio.sh (chmod +x wsl/run_audio.sh) -->
+```
 
 Salida esperada:
 
+```text
 jobs/test_short.wav
+```
 
-También puedes generar un clip directo:
+### 6.6. Clip directo de prueba
 
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_audio.sh --text "Esto es una prueba corta de la voz actual." --output outputs/prueba_voice_design.wav
-<!-- .md 4: Puedes personalizar el texto y la ruta de salida según tus necesidades -->
-7. Cómo ejecutar por jobs
-Todos los jobs
+```
+
+### 6.7. Ejecutar todos los jobs
+
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_audio.sh --overwrite
-<!-- .md 5: Este comando sobrescribe los audios existentes, úsalo con precaución -->
-Un solo job
+```
+
+### 6.8. Ejecutar un solo job
+
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_audio.sh --job-id 000001 --overwrite
-<!-- .md 6: Cambia el job-id por el identificador de tu job -->
+```
 
-Compatibilidad mantenida:
+Campo requerido en:
 
-jobs/000001/script.json
-jobs/000002/script.json
-jobs/000003/script.json
+```text
+jobs/<job_id>/script.json
+```
 
-Campo requerido dentro de script.json:
+Campo obligatorio:
 
+```text
 guion_narrado
+```
 
 Salida final:
 
+```text
 jobs/<job_id>/audio/narration.wav
-8. Flujo oficial para consistencia real
+```
 
-Este es el flujo correcto si quieres la misma voz en muchos clips.
+---
 
-Paso 1: diseñar voz de referencia
-Script: wsl/design_voice.py
-Wrapper: wsl/run_design_voice.sh
-Modelo: Qwen3-TTS-12Hz-1.7B-VoiceDesign
-Método: generate_voice_design(...)
+## 7. Flujo profesional con VoiceDesign + Base
+
+### 7.1. Paso 1: diseñar la voz de referencia
+
+Script:
+
+```text
+wsl/design_voice.py
+```
+
+Wrapper:
+
+```text
+wsl/run_design_voice.sh
+```
+
+Modelo usado:
+
+```text
+Qwen3-TTS-12Hz-1.7B-VoiceDesign
+```
+
+Método usado:
+
+```python
+generate_voice_design(...)
+```
 
 Ejemplo:
 
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_design_voice.sh \
   --voice-name voz_finanzas \
-  --description "Voz femenina madura, seria, clara, profesional y estable para narración de podcast de finanzas." \
+  --description "Voz femenina madura, seria, clara, profesional y estable para narracion de podcast de finanzas." \
   --reference-text "Hola, esta es una referencia corta para conservar la misma identidad de voz en clips posteriores." \
   --overwrite
+```
 
 Archivos generados:
 
+```text
 assets/voices/voz_finanzas/reference.wav
 assets/voices/voz_finanzas/reference.txt
 assets/voices/voz_finanzas/voice.json
-Paso 2: clonar esa voz con Base
-Script: wsl/generate_audio_from_prompt.py
-Wrapper: wsl/run_generate_audio_from_prompt.sh
-Modelo: Qwen3-TTS-12Hz-1.7B-Base
-Métodos:
+```
+
+### 7.2. Paso 2: clonar esa voz con Base
+
+Script:
+
+```text
+wsl/generate_audio_from_prompt.py
+```
+
+Wrapper:
+
+```text
+wsl/run_generate_audio_from_prompt.sh
+```
+
+Modelo usado:
+
+```text
+Qwen3-TTS-12Hz-1.7B-Base
+```
+
+Métodos usados:
+
+```python
 create_voice_clone_prompt(...)
 generate_voice_clone(...)
+```
 
 Ejemplo directo:
 
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_generate_audio_from_prompt.sh \
   --voice-name voz_finanzas \
   --text "Este clip debe sonar con la misma voz consistente que la referencia." \
   --save-prompt \
   --output outputs/voz_finanzas_clip.wav
+```
 
-Si --save-prompt está activo, el prompt se guarda en:
+Si `--save-prompt` está activo, se guarda:
 
+```text
 assets/voices/<voice_name>/voice_clone_prompt.json
-Paso 3: reutilizar esa voz en muchos clips
+```
 
-Job concreto:
+### 7.3. Paso 3: reutilizar esa voz en muchos clips
 
-bash wsl/run_generate_audio_from_prompt.sh --job-id 000001 --voice-name voz_finanzas --overwrite
+Primer job:
 
-Otro job:
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
+bash wsl/run_generate_audio_from_prompt.sh --job-id 000001 --voice-name voz_finanzas --save-prompt --overwrite
+```
 
+Segundo job:
+
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_generate_audio_from_prompt.sh --job-id 000002 --voice-name voz_finanzas --overwrite
+```
 
-Todos usan:
+Tercer job reutilizando el prompt ya serializado:
 
-el mismo reference.wav
-el mismo reference.txt
-el mismo voice_clone_prompt.json si ya fue generado
-9. Cambio de voz por job en el flujo consistente
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
+bash wsl/run_generate_audio_from_prompt.sh \
+  --job-id 000003 \
+  --voice-name voz_finanzas \
+  --voice-clone-prompt assets/voices/voz_finanzas/voice_clone_prompt.json \
+  --overwrite
+```
 
-Puedes crear:
+---
 
+## 8. Cambio de voz por job en el flujo consistente
+
+Archivo:
+
+```text
 jobs/<job_id>/voice.json
+```
 
 Ejemplo simple:
 
+```json
 {
   "voice_name": "voz_finanzas"
 }
+```
 
 Ejemplo avanzado:
 
+```json
 {
   "voice_name": "voz_finanzas",
   "reference_wav": "/mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine/assets/voices/voz_finanzas/reference.wav",
@@ -241,7 +462,19 @@ Ejemplo avanzado:
   "voice_clone_prompt_path": "/mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine/assets/voices/voz_finanzas/voice_clone_prompt.json",
   "x_vector_only_mode": false
 }
-10. Estructura final de carpetas
+```
+
+Este archivo es leído por:
+
+```text
+wsl/generate_audio_from_prompt.py
+```
+
+---
+
+## 9. Estructura final del módulo de audio
+
+```text
 assets/
   voices/
     <voice_name>/
@@ -257,161 +490,231 @@ jobs/
     voice.json
     audio/
       narration.wav
-11. Comandos exactos recomendados
-Prueba rápida del flujo actual VoiceDesign
+```
+
+---
+
+## 10. Qué muestran los wrappers
+
+Los tres wrappers:
+
+- `wsl/run_audio.sh`
+- `wsl/run_design_voice.sh`
+- `wsl/run_generate_audio_from_prompt.sh`
+
+Imprimen:
+
+- proyecto
+- python usado
+- modelo usado
+- device
+
+Y fallan con código distinto de cero si:
+
+- no existe el Python configurado
+- falla el script Python llamado
+
+---
+
+## 11. GPU, dtype y rendimiento
+
+Comportamiento real actual:
+
+1. Si `QWEN_TTS_DEVICE=auto`
+   - usa GPU si CUDA está disponible
+   - usa `torch.bfloat16` en GPU
+
+2. Si `QWEN_TTS_DEVICE=cpu`
+   - usa CPU
+   - usa `torch.float32`
+
+3. Si `QWEN_TTS_DEVICE=cuda`
+   - exige CUDA disponible
+   - usa `torch.bfloat16`
+
+Sobre FlashAttention:
+
+- `QWEN_TTS_USE_FLASH_ATTN=false` por defecto
+- si lo activas y la instalación es compatible, el código intenta usar:
+
+```python
+attn_implementation="flash_attention_2"
+```
+
+---
+
+## 12. Cómo diseñar bien una voz
+
+Separar siempre:
+
+### 12.1. Identidad
+
+Quién es la voz:
+
+- mujer madura
+- seria
+- profesional
+- creíble
+- medio-grave
+
+### 12.2. Estilo
+
+Cómo habla:
+
+- ritmo medio
+- pausado
+- claro
+- estilo podcast
+- natural
+- sobrio
+
+Ejemplo bueno para este proyecto:
+
+```text
+Voz femenina madura de 35 a 45 años, seria, profesional, natural y creible. Timbre medio-grave, elegante y estable. Ritmo medio, pausado, muy entendible, con diccion clara. Estilo podcast profesional, cercano pero sobrio, sin exageraciones ni tono robotico.
+```
+
+---
+
+## 13. Comandos exactos recomendados
+
+### 13.1. Probar el flujo rápido VoiceDesign
+
+```bash
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_audio.sh --test-short
-Generar audio VoiceDesign para un job
+```
+
+### 13.2. Generar audio VoiceDesign para un job
+
+```bash
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_audio.sh --job-id 000001 --overwrite
-Diseñar una voz nueva
+```
+
+### 13.3. Diseñar una voz nueva
+
+```bash
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_design_voice.sh \
   --voice-name voz_finanzas \
-  --description "Voz femenina madura, sobria, profesional, creíble y estable." \
+  --description "Voz femenina madura, sobria, profesional, creible y estable." \
   --reference-text "Hola, esta es una referencia corta para conservar la misma identidad de voz en clips posteriores." \
   --overwrite
-<!-- .md 7: Puedes cambiar los valores de voice-name, description y reference-text según tu caso -->
-Generar el primer clip consistente y guardar el prompt
+```
+
+### 13.4. Generar el primer clip consistente y guardar el prompt
+
+```bash
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_generate_audio_from_prompt.sh \
   --voice-name voz_finanzas \
   --job-id 000001 \
   --save-prompt \
   --overwrite
-<!-- .md 8: El flag --save-prompt guarda el prompt para reutilizar la voz, útil para consistencia -->
-Reutilizar la misma voz en otro job
+```
+
+### 13.5. Reutilizar la misma voz en otro job
+
+```bash
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_generate_audio_from_prompt.sh \
   --voice-name voz_finanzas \
   --job-id 000002 \
   --overwrite
-<!-- .md 9: Puedes repetir este comando para todos los jobs que quieras con la misma voz -->
-Reutilizar el prompt ya serializado
+```
+
+### 13.6. Reutilizar el prompt serializado
+
+```bash
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_generate_audio_from_prompt.sh \
   --job-id 000003 \
   --voice-name voz_finanzas \
   --voice-clone-prompt assets/voices/voz_finanzas/voice_clone_prompt.json \
   --overwrite
-<!-- .md 10: El flag --voice-clone-prompt permite especificar un prompt ya serializado -->
-12. Qué muestran los wrappers
+```
 
-Cada wrapper imprime:
+---
 
-proyecto
-python usado
-modelo usado
-device
+## 14. Compatibilidad con la estructura actual
 
-Y falla con código distinto de cero si:
+La documentación está alineada con estos jobs ya existentes:
 
-no existe el python
-falla el script Python
-13. GPU y dtype
+- `jobs/000001`
+- `jobs/000002`
+- `jobs/000003`
 
-Comportamiento actual:
+Archivos esperados por el flujo:
 
-QWEN_TTS_DEVICE=auto
-usa GPU si CUDA está disponible
-usa torch.bfloat16 en GPU
-QWEN_TTS_DEVICE=cpu
-usa CPU y torch.float32
-QWEN_TTS_DEVICE=cuda
-exige CUDA disponible
-14. Qué hacer si no vas a instalar FlashAttention
+```text
+jobs/<job_id>/script.json
+jobs/<job_id>/status.json
+jobs/<job_id>/audio/
+```
 
-No pasa nada.
+En `script.json`, el campo usado por el flujo Base y por el flujo rápido es:
 
-Puedes trabajar sin flash-attn si:
+```text
+guion_narrado
+```
 
-usas torch.bfloat16 en GPU
-haces pruebas cortas primero
-usas VoiceDesign para diseñar
-usas Base para reutilizar la voz
+---
 
-Recomendación práctica:
+## 15. Resumen operativo final
 
-primero haz funcionar el flujo
-luego optimizas
-15. Cómo diseñar bien una voz
-
-Una buena voz se diseña separando:
-
-Identidad
-
-Quién es la voz:
-
-mujer madura
-seria
-profesional
-creíble
-medio-grave
-Estilo
-
-Cómo habla:
-
-ritmo medio
-pausado
-claro
-estilo podcast
-natural
-sobrio
-
-Ejemplo bueno para este proyecto:
-
-Voz femenina madura de 35 a 45 años, seria, profesional, natural y creíble. Timbre medio-grave, elegante y estable. Ritmo medio, pausado, muy entendible, con dicción clara. Estilo podcast profesional, cercano pero sobrio, sin exageraciones ni tono robótico.
-16. Resumen operativo final
-Si quieres describir la voz y generar audio rápido
+### 15.1. Si quieres describir la voz y generar audio rápido
 
 Usa:
 
+```bash
 bash wsl/run_audio.sh
-Si quieres la misma voz en muchos clips
+```
+
+### 15.2. Si quieres la misma voz en muchos clips
 
 Haz esto:
 
-Diseña la voz
+1. Diseña la voz:
+
+```bash
 bash wsl/run_design_voice.sh ...
-<!-- .md 11: Reemplaza los ... por los argumentos necesarios según tu caso -->
-Genera el primer clip y guarda el prompt
+```
+
+2. Genera el primer clip y guarda el prompt:
+
+```bash
 bash wsl/run_generate_audio_from_prompt.sh --save-prompt ...
-<!-- .md 12: Asegúrate de pasar --voice-name y --job-id si corresponde -->
-Reutiliza esa misma voz en más jobs
+```
+
+3. Reutiliza esa misma voz en más jobs:
+
+```bash
 bash wsl/run_generate_audio_from_prompt.sh --job-id 000002 ...
-17. Recomendación práctica para este proyecto
+```
 
-Tu estructura ya está lista para trabajar así:
+---
 
-wsl/design_voice.py
-wsl/generate_audio_from_prompt.py
-wsl/run_design_voice.sh
-wsl/run_generate_audio_from_prompt.sh
+## 16. Siguiente paso recomendado
 
-Entonces el camino correcto ahora es:
+Primero:
 
-Diseña una voz maestra, por ejemplo:
-voz_finanzas
-voz_podcast_mujer
-voz_documental_seria
-Escucha reference.wav
-Cuando te guste, úsala en generate_audio_from_prompt.py
-Reutiliza esa voz en todos tus jobs
-18. Siguiente paso recomendado
-
-Haz primero esto:
-
+```bash
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_design_voice.sh \
   --voice-name voz_podcast_mujer \
   --description "Voz femenina madura de 35 a 45 años, seria, profesional, natural, clara y estable. Timbre medio-grave. Ritmo medio, pausado y entendible. Estilo podcast profesional." \
   --reference-text "Hola, esta es una referencia corta para conservar la misma identidad de voz en clips posteriores." \
   --overwrite
+```
 
-Y luego:
+Después:
 
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_generate_audio_from_prompt.sh \
   --voice-name voz_podcast_mujer \
   --job-id 000001 \
   --save-prompt \
   --overwrite
+```
