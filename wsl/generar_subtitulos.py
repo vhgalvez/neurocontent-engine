@@ -1,3 +1,5 @@
+# wsl\generar_subtitulos.py
+
 import json
 import os
 import subprocess

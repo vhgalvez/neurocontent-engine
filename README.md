@@ -74,6 +74,10 @@ Para cada fila con `estado=pending`, el pipeline:
 Primera vez:
 
 ```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
+```
+
+```bash
 chmod +x wsl/run_audio.sh wsl/run_subs.sh wsl/run_wsl_pipeline.sh
 ```
 
