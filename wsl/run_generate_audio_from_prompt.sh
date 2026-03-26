@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-
+# wsl\run_generate_audio_from_prompt.sh
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

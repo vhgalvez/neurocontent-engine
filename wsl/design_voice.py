@@ -1,3 +1,19 @@
+"""Ejemplos de uso:
+
+bash wsl/run_design_voice.sh \
+  --voice-name voz_finanzas \
+  --description "Voz femenina madura, sobria y profesional." \
+  --reference-text "Hola, esta es una referencia corta." \
+  --overwrite
+
+python wsl/design_voice.py \
+  --voice-name voz_finanzas \
+  --description "Voz femenina madura, sobria y profesional." \
+  --reference-text "Hola, esta es una referencia corta." \
+  --device cuda \
+  --overwrite
+"""
+
 import argparse
 import json
 import os
@@ -174,7 +190,7 @@ def main() -> None:
         target_dir = Path(args.reference_root) / voice_name
         reference_wav = target_dir / "reference.wav"
         reference_text_path = target_dir / "reference.txt"
-        metadata_path = target_dir / "metadata.json"
+        metadata_path = target_dir / "voice.json"
 
         if reference_wav.exists() and not args.overwrite:
             raise RuntimeError(

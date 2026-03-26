@@ -1,3 +1,4 @@
+# generate_audio_from_prompt.py
 import argparse
 import json
 import os
@@ -63,6 +64,10 @@ def safe_write_json(path: Path, data) -> None:
 
 def safe_read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
+
+
+def safe_read_voice_metadata(path: Path) -> dict:
+    return safe_read_json(path, default={}) or {}
 
 
 def load_job_status(status_path: Path) -> dict:
@@ -253,16 +258,17 @@ def resolve_job_reference_config(job_id: str, args: argparse.Namespace) -> dict:
     voice_name = normalize_text(job_config.get("voice_name", args.voice_name or DEFAULT_VOICE_NAME)).replace(" ", "_")
     reference_root = Path(args.reference_root)
     voice_dir = reference_root / voice_name if voice_name else None
+    voice_metadata = safe_read_voice_metadata(voice_dir / "voice.json") if voice_dir and (voice_dir / "voice.json").exists() else {}
 
-    reference_wav = job_config.get("reference_wav")
+    reference_wav = job_config.get("reference_wav") or voice_metadata.get("reference_wav")
     if not reference_wav and voice_dir:
         reference_wav = str(voice_dir / "reference.wav")
 
-    reference_text = job_config.get("reference_text")
+    reference_text = job_config.get("reference_text") or voice_metadata.get("reference_text")
     if not reference_text and voice_dir and (voice_dir / "reference.txt").exists():
         reference_text = safe_read_text(voice_dir / "reference.txt")
 
-    prompt_json = job_config.get("voice_clone_prompt_path")
+    prompt_json = job_config.get("voice_clone_prompt_path") or voice_metadata.get("voice_clone_prompt_path")
     if not prompt_json and voice_dir and (voice_dir / "voice_clone_prompt.json").exists():
         prompt_json = str(voice_dir / "voice_clone_prompt.json")
 
@@ -271,8 +277,8 @@ def resolve_job_reference_config(job_id: str, args: argparse.Namespace) -> dict:
         "reference_wav": reference_wav,
         "reference_text": reference_text,
         "voice_clone_prompt_path": prompt_json,
-        "x_vector_only_mode": bool(job_config.get("x_vector_only_mode", args.x_vector_only_mode)),
-        "reference_language": job_config.get("reference_language", args.reference_language),
+        "x_vector_only_mode": bool(job_config.get("x_vector_only_mode", voice_metadata.get("x_vector_only_mode", args.x_vector_only_mode))),
+        "reference_language": job_config.get("reference_language", voice_metadata.get("language", args.reference_language)),
     }
 
 
@@ -404,8 +410,13 @@ def main() -> None:
             if args.reference_text:
                 reference_text = args.reference_text
             else:
-                default_reference_text_path = Path(args.reference_root) / voice_name / "reference.txt"
-                reference_text = safe_read_text(default_reference_text_path) if default_reference_text_path.exists() else None
+                voice_dir = Path(args.reference_root) / voice_name
+                voice_metadata = safe_read_voice_metadata(voice_dir / "voice.json") if (voice_dir / "voice.json").exists() else {}
+                default_reference_text_path = voice_dir / "reference.txt"
+                reference_text = (
+                    voice_metadata.get("reference_text")
+                    or (safe_read_text(default_reference_text_path) if default_reference_text_path.exists() else None)
+                )
             prompt_input = Path(args.voice_clone_prompt) if args.voice_clone_prompt else None
             x_vector_only_mode = args.x_vector_only_mode
             output_path = Path(args.output) if args.output else PROJECT_DIR / "outputs" / "voice_clone_preview.wav"

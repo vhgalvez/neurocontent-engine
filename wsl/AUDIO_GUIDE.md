@@ -162,7 +162,7 @@ bash wsl/run_design_voice.sh \
 Archivos generados:
 - `assets/voices/voz_finanzas/reference.wav`
 - `assets/voices/voz_finanzas/reference.txt`
-- `assets/voices/voz_finanzas/metadata.json`
+- `assets/voices/voz_finanzas/voice.json`
 
 ### Paso 2: clonar esa voz con Base
 - Script: `wsl/generate_audio_from_prompt.py`
@@ -233,7 +233,27 @@ Ejemplo avanzado:
 }
 ```
 
-## 9. Comandos exactos recomendados
+## 9. Estructura final de carpetas
+
+```text
+assets/
+  voices/
+    <voice_name>/
+      reference.wav
+      reference.txt
+      voice.json
+      voice_clone_prompt.json
+
+jobs/
+  <job_id>/
+    script.json
+    status.json
+    voice.json
+    audio/
+      narration.wav
+```
+
+## 10. Comandos exactos recomendados
 
 ### Prueba rapida del flujo actual VoiceDesign
 
@@ -292,7 +312,7 @@ bash wsl/run_generate_audio_from_prompt.sh \
   --overwrite
 ```
 
-## 10. Que muestran los wrappers
+## 11. Que muestran los wrappers
 
 Cada wrapper imprime:
 - proyecto
@@ -304,7 +324,7 @@ Y falla con codigo distinto de cero si:
 - no existe el python
 - falla el script Python
 
-## 11. GPU y dtype
+## 12. GPU y dtype
 
 Comportamiento actual:
 - `QWEN_TTS_DEVICE=auto`
@@ -315,7 +335,7 @@ Comportamiento actual:
 - `QWEN_TTS_DEVICE=cuda`
   - exige CUDA disponible
 
-## 12. Resumen operativo
+## 13. Resumen operativo
 
 ### Si quieres describir la voz y generar audio rapido
 - usa `bash wsl/run_audio.sh`
