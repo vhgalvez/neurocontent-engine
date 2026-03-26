@@ -1,4 +1,5 @@
 # config.py
+
 import os
 from pathlib import Path
 
@@ -19,15 +20,14 @@ MODEL = "qwen3:8b"
 OPTIONS = {
     "num_ctx": 4096,
     "num_predict": 900,
-    "temperature": 0.78,
-    "top_p": 0.9,
+    "temperature": 0.82,
+    "top_p": 0.92,
+    "repeat_penalty": 1.08,
 }
 
 REQUEST_TIMEOUT_SECONDS = 180
-OLLAMA_MAX_RETRIES = int(os.getenv("NC_OLLAMA_MAX_RETRIES", "2"))
+OLLAMA_MAX_RETRIES = int(os.getenv("NC_OLLAMA_MAX_RETRIES", "3"))
 
-# Overwrite flags for the editorial pipeline.
-# By default the project is idempotent and reuses job artifacts if they already exist.
 OVERWRITE_ALL = os.getenv("NC_OVERWRITE_ALL", "false").lower() == "true"
 OVERWRITE_SCRIPT = os.getenv("NC_OVERWRITE_SCRIPT", "false").lower() == "true" or OVERWRITE_ALL
 OVERWRITE_MANIFEST = os.getenv("NC_OVERWRITE_MANIFEST", "false").lower() == "true" or OVERWRITE_ALL

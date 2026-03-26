@@ -1,3 +1,5 @@
+# director.py
+
 import csv
 import json
 import re
@@ -19,7 +21,12 @@ from config import (
     OPTIONS,
     REQUEST_TIMEOUT_SECONDS,
 )
-from prompts import SYSTEM_SCRIPT, USER_SCRIPT
+from prompts import (
+    REWRITE_SYSTEM_SCRIPT,
+    REWRITE_USER_SCRIPT,
+    SYSTEM_SCRIPT,
+    USER_SCRIPT,
+)
 
 SCRIPT_REQUIRED_KEYS = {
     "hook",
@@ -72,6 +79,9 @@ TRANSITION_MARKERS = {
     "primero",
     "despues",
     "al final",
+    "y ahi",
+    "por eso mismo",
+    "de hecho",
 }
 
 
@@ -251,21 +261,145 @@ def _normalize_brief(brief: Dict[str, Any]) -> Dict[str, str]:
     return normalized
 
 
+def _clean_compare_text(text: str) -> str:
+    normalized = " ".join(str(text).lower().split()).strip()
+    normalized = re.sub(r"[^\wáéíóúüñ\s]", "", normalized, flags=re.UNICODE)
+    return " ".join(normalized.split())
+
+
+def _remove_exact_cta(text: str, cta: str) -> str:
+    text_norm = " ".join(str(text).split()).strip()
+    cta_norm = " ".join(str(cta).split()).strip()
+
+    if not cta_norm:
+        return text_norm
+
+    if text_norm.endswith(cta_norm):
+        return text_norm[: -len(cta_norm)].strip(" .,!?:;")
+
+    return text_norm
+
+
 def build_prompt(brief: Dict[str, Any]) -> str:
     normalized = _normalize_brief(brief)
     return USER_SCRIPT.format(**normalized)
 
 
-def build_naive_narration(script_data: Dict[str, Any]) -> str:
+def build_naive_narration(script_data: Dict[str, Any], include_cta: bool = False) -> str:
     pieces = [
         script_data.get("hook", ""),
         script_data.get("problema", ""),
         script_data.get("explicacion", ""),
         *script_data.get("solucion", []),
         script_data.get("cierre", ""),
-        script_data.get("cta", ""),
     ]
-    return " ".join(" ".join(str(piece).split()) for piece in pieces if str(piece).strip()).strip()
+
+    if include_cta:
+        pieces.append(script_data.get("cta", ""))
+
+    return " ".join(
+        " ".join(str(piece).split()) for piece in pieces if str(piece).strip()
+    ).strip()
+
+
+def _count_exact_block_reuse(script_data: Dict[str, Any], narration: str) -> int:
+    narration_clean = _clean_compare_text(narration)
+
+    blocks = [
+        script_data.get("hook", ""),
+        script_data.get("problema", ""),
+        script_data.get("explicacion", ""),
+        *script_data.get("solucion", []),
+        script_data.get("cierre", ""),
+    ]
+
+    reused = 0
+    for block in blocks:
+        block_clean = _clean_compare_text(block)
+        if block_clean and block_clean in narration_clean:
+            reused += 1
+    return reused
+
+
+def _should_try_rewrite(exc: OllamaError) -> bool:
+    text = str(exc).lower()
+    rewrite_triggers = [
+        "concatenacion mecanica",
+        "guion_narrado",
+        "transiciones naturales",
+        "demasiado corto",
+        "bloques literales",
+    ]
+    return any(trigger in text for trigger in rewrite_triggers)
+
+
+def _ollama_chat_json(messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    payload = {
+        "model": MODEL,
+        "messages": messages,
+        "stream": False,
+        "format": "json",
+        "options": OPTIONS,
+    }
+
+    response = requests.post(
+        OLLAMA_URL,
+        json=payload,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+
+    if response.status_code != 200:
+        raise OllamaError(f"Error Ollama ({response.status_code}):\n{response.text}")
+
+    try:
+        data = response.json()
+    except ValueError:
+        raise OllamaError(f"Ollama devolvio una respuesta no JSON:\n{response.text}")
+
+    message = data.get("message")
+    if not isinstance(message, dict):
+        raise OllamaError(
+            "Respuesta inesperada de Ollama: falta 'message'.\n"
+            f"{json.dumps(data, ensure_ascii=False, indent=2)}"
+        )
+
+    content = message.get("content", "")
+    if not isinstance(content, str) or not content.strip():
+        raise OllamaError(
+            "La respuesta de Ollama no contiene texto utilizable.\n"
+            f"{json.dumps(data, ensure_ascii=False, indent=2)}"
+        )
+
+    return _extract_json_from_text(content)
+
+
+def rewrite_guion_narrado(brief: Dict[str, Any], script_data: Dict[str, Any]) -> str:
+    normalized_brief = _normalize_brief(brief)
+
+    rewrite_prompt = REWRITE_USER_SCRIPT.format(
+        idea_central=normalized_brief["idea_central"],
+        plataforma=normalized_brief["plataforma"],
+        duracion_seg=normalized_brief["duracion_seg"],
+        tono=normalized_brief["tono"],
+        ritmo=normalized_brief["ritmo"],
+        emocion_principal=normalized_brief["emocion_principal"],
+        emocion_secundaria=normalized_brief["emocion_secundaria"],
+        cta_texto=normalized_brief["cta_texto"],
+        script_json=json.dumps(script_data, ensure_ascii=False, indent=2),
+    )
+
+    rewrite_data = _ollama_chat_json(
+        [
+            {"role": "system", "content": REWRITE_SYSTEM_SCRIPT.strip()},
+            {"role": "user", "content": rewrite_prompt.strip()},
+        ]
+    )
+
+    guion_narrado = rewrite_data.get("guion_narrado", "")
+    if not isinstance(guion_narrado, str) or not guion_narrado.strip():
+        raise OllamaError("La reescritura de guion_narrado devolvio texto vacio.")
+
+    return " ".join(guion_narrado.split()).strip()
 
 
 def _sentence_chunks(text: str) -> List[str]:
@@ -307,20 +441,34 @@ def validate_script_data(script_data: Dict[str, Any]) -> None:
             )
 
     narration = " ".join(script_data["guion_narrado"].split()).strip()
-    naive_narration = build_naive_narration(script_data)
+    narration_without_cta = _remove_exact_cta(narration, script_data["cta"])
+    naive_narration = build_naive_narration(script_data, include_cta=False)
+
     sentence_chunks = _sentence_chunks(narration)
-    similarity = SequenceMatcher(None, narration.lower(), naive_narration.lower()).ratio()
     lower_narration = narration.lower()
 
-    if len(sentence_chunks) < 3:
-        raise OllamaError("guion_narrado debe tener al menos 3 frases completas.")
+    similarity = SequenceMatcher(
+        None,
+        _clean_compare_text(narration_without_cta),
+        _clean_compare_text(naive_narration),
+    ).ratio()
 
-    if len(narration.split()) < 45:
+    exact_reuse = _count_exact_block_reuse(script_data, narration_without_cta)
+
+    if len(sentence_chunks) < 4:
+        raise OllamaError("guion_narrado debe tener al menos 4 frases completas.")
+
+    if len(narration.split()) < 40:
         raise OllamaError("guion_narrado es demasiado corto para TTS natural.")
 
-    if similarity > 0.9:
+    if similarity > 0.92 and exact_reuse >= 4:
         raise OllamaError(
             "guion_narrado se parece demasiado a una concatenacion mecanica de bloques."
+        )
+
+    if exact_reuse >= 5:
+        raise OllamaError(
+            "guion_narrado reutiliza demasiados bloques literales del esquema original."
         )
 
     if not any(marker in lower_narration for marker in TRANSITION_MARKERS):
@@ -342,62 +490,44 @@ def _normalize_script_data(script_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def generate_script(brief: Dict[str, Any]) -> Dict[str, Any]:
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_SCRIPT.strip()},
-            {"role": "user", "content": build_prompt(brief).strip()},
-        ],
-        "stream": False,
-        "format": "json",
-        "options": OPTIONS,
-    }
+    messages = [
+        {"role": "system", "content": SYSTEM_SCRIPT.strip()},
+        {"role": "user", "content": build_prompt(brief).strip()},
+    ]
 
     last_error: Exception | None = None
 
     for attempt in range(1, OLLAMA_MAX_RETRIES + 1):
         try:
-            response = requests.post(
-                OLLAMA_URL,
-                json=payload,
-                timeout=REQUEST_TIMEOUT_SECONDS,
-            )
+            script_data = _ollama_chat_json(messages)
+
+            try:
+                validate_script_data(script_data)
+            except OllamaError as validation_error:
+                if _should_try_rewrite(validation_error):
+                    try:
+                        repaired_narration = rewrite_guion_narrado(brief, script_data)
+                        script_data["guion_narrado"] = repaired_narration
+                        validate_script_data(script_data)
+                    except OllamaError as rewrite_error:
+                        last_error = OllamaError(
+                            f"Intento {attempt} invalido tras reescritura: {rewrite_error}"
+                        )
+                        continue
+                else:
+                    last_error = OllamaError(
+                        f"Intento {attempt} invalido: {validation_error}"
+                    )
+                    continue
+
+            return _normalize_script_data(script_data)
+
         except requests.RequestException as exc:
             last_error = OllamaError(f"No se pudo conectar con Ollama: {exc}")
             continue
-
-        if response.status_code != 200:
-            last_error = OllamaError(f"Error Ollama ({response.status_code}):\n{response.text}")
-            continue
-
-        try:
-            data = response.json()
-        except ValueError as exc:
-            last_error = OllamaError(f"Ollama devolvio una respuesta no JSON:\n{response.text}")
-            continue
-
-        message = data.get("message")
-        if not isinstance(message, dict):
-            last_error = OllamaError(
-                "Respuesta inesperada de Ollama: falta 'message'.\n"
-                f"{json.dumps(data, ensure_ascii=False, indent=2)}"
-            )
-            continue
-
-        content = message.get("content", "")
-        if not isinstance(content, str) or not content.strip():
-            last_error = OllamaError(
-                "La respuesta de Ollama no contiene texto utilizable.\n"
-                f"{json.dumps(data, ensure_ascii=False, indent=2)}"
-            )
-            continue
-
-        try:
-            script_data = _extract_json_from_text(content)
-            validate_script_data(script_data)
-            return _normalize_script_data(script_data)
         except OllamaError as exc:
-            last_error = OllamaError(f"Intento {attempt} invalido: {exc}")
+            last_error = exc
+            continue
 
     if last_error:
         raise last_error
@@ -449,6 +579,10 @@ def _scene_transition(index: int, total: int, role: str) -> str:
 
 
 def _scene_specs(script: Dict[str, Any], brief: Dict[str, Any]) -> List[Dict[str, Any]]:
+    solucion = script.get("solucion", ["", "", ""])
+    while len(solucion) < 3:
+        solucion.append("")
+
     return [
         {
             "role": "hook",
@@ -483,7 +617,7 @@ def _scene_specs(script: Dict[str, Any], brief: Dict[str, Any]) -> List[Dict[str
         },
         {
             "role": "solucion_1",
-            "text": script.get("solucion", ["", "", ""])[0],
+            "text": solucion[0],
             "visual_intent": "Present the first corrective move as immediate and executable.",
             "camera": "medium shot with decisive gesture or practical action",
             "mood": "clarity and momentum",
@@ -491,7 +625,7 @@ def _scene_specs(script: Dict[str, Any], brief: Dict[str, Any]) -> List[Dict[str
         },
         {
             "role": "solucion_2",
-            "text": script.get("solucion", ["", "", ""])[1],
+            "text": solucion[1],
             "visual_intent": "Escalate from awareness to a repeatable habit or system.",
             "camera": "alternating close-up and insert detail for rhythm",
             "mood": "control and progression",
@@ -499,7 +633,7 @@ def _scene_specs(script: Dict[str, Any], brief: Dict[str, Any]) -> List[Dict[str
         },
         {
             "role": "solucion_3",
-            "text": script.get("solucion", ["", "", ""])[2],
+            "text": solucion[2],
             "visual_intent": "Land the final action as the bridge to transformation.",
             "camera": "punch-in or lateral motion with stronger forward drive",
             "mood": f"{brief.get('emocion_secundaria', 'resolve')} with confidence",
@@ -603,6 +737,7 @@ def _build_scene_plan(script: Dict[str, Any], brief: Dict[str, Any]) -> List[Dic
     sentence_chunks = _sentence_chunks(narration)
     specs = [spec for spec in _scene_specs(script, brief) if str(spec["text"]).strip()]
     total = len(specs)
+
     if total == 0:
         return []
 
@@ -618,7 +753,11 @@ def _build_scene_plan(script: Dict[str, Any], brief: Dict[str, Any]) -> List[Dic
     scene_plan: List[Dict[str, Any]] = []
     for index, spec in enumerate(specs, start=1):
         narration_focus = " ".join(groups[index - 1]).strip() or spec["text"]
-        scene_range = time_ranges[index - 1] if index - 1 < len(time_ranges) else {"start_sec": None, "end_sec": None}
+        scene_range = (
+            time_ranges[index - 1]
+            if index - 1 < len(time_ranges)
+            else {"start_sec": None, "end_sec": None}
+        )
         transition = _scene_transition(index, total, spec["role"])
         base_prompt = {
             "subject": character_design["identity_anchor"],
@@ -673,10 +812,6 @@ def build_visual_manifest(
     scene_plan = _build_scene_plan(script, brief)
     duration_sec = _duration_seconds(brief)
 
-    # Contract for the downstream visual repository:
-    # - consume assets.audio and assets.subtitles as the timing backbone
-    # - consume script_context + scene_plan as editorial intent
-    # - consume visual_style + prompt_base as the starting point for ComfyUI / Wan prompts
     return {
         "manifest_version": "1.0",
         "pipeline_role": "editorial_preproduction_only",
@@ -721,8 +856,6 @@ def build_visual_manifest(
             ],
         },
         "assets": {
-            # The visual repo should load these relative paths and treat them as canonical
-            # narration and subtitle assets for timing, alignment and edit decisions.
             "audio": str(audio_path.relative_to(BASE_DIR).as_posix()),
             "subtitles": str(subtitles_path.relative_to(BASE_DIR).as_posix()),
         },

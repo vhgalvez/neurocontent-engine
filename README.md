@@ -242,3 +242,9 @@ Uso recomendado del repo visual:
 5. En WSL2 ejecutar `bash wsl/run_wsl_pipeline.sh all`
 6. Comprobar `jobs/000001/audio/narration.wav`
 7. Comprobar `jobs/000001/subtitles/narration.srt`
+
+
+
+$env:NC_OVERWRITE_SCRIPT="true"
+$env:NC_OVERWRITE_MANIFEST="true"
+& C:\Users\vhgal\AppData\Local\Python\pythoncore-3.14-64\python.exe c:/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine/main.py
