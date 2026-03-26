@@ -107,11 +107,13 @@ Ejemplo avanzado:
   "style": "Ritmo calmado, dicción clara, tono documental.",
   "voice_description": "Evitar tono juvenil. Mantener carácter profesional."
 }
+<!-- .md 1: Ejemplo avanzado, puedes agregar más campos según el modelo -->
 5. Cómo cambiar la voz global
 
 Editar:
 
 wsl/voices.env
+<!-- .md 2: Explica aquí cómo crear el archivo voices.env si no existe o qué hacer si falta alguna variable -->
 
 Variables principales:
 
@@ -130,6 +132,7 @@ Desde la raíz del proyecto en WSL2:
 
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_audio.sh --test-short
+<!-- .md 3: Asegúrate de tener permisos de ejecución en run_audio.sh (chmod +x wsl/run_audio.sh) -->
 
 Salida esperada:
 
@@ -138,11 +141,14 @@ jobs/test_short.wav
 También puedes generar un clip directo:
 
 bash wsl/run_audio.sh --text "Esto es una prueba corta de la voz actual." --output outputs/prueba_voice_design.wav
+<!-- .md 4: Puedes personalizar el texto y la ruta de salida según tus necesidades -->
 7. Cómo ejecutar por jobs
 Todos los jobs
 bash wsl/run_audio.sh --overwrite
+<!-- .md 5: Este comando sobrescribe los audios existentes, úsalo con precaución -->
 Un solo job
 bash wsl/run_audio.sh --job-id 000001 --overwrite
+<!-- .md 6: Cambia el job-id por el identificador de tu job -->
 
 Compatibilidad mantenida:
 
@@ -265,6 +271,7 @@ bash wsl/run_design_voice.sh \
   --description "Voz femenina madura, sobria, profesional, creíble y estable." \
   --reference-text "Hola, esta es una referencia corta para conservar la misma identidad de voz en clips posteriores." \
   --overwrite
+<!-- .md 7: Puedes cambiar los valores de voice-name, description y reference-text según tu caso -->
 Generar el primer clip consistente y guardar el prompt
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_generate_audio_from_prompt.sh \
@@ -272,12 +279,14 @@ bash wsl/run_generate_audio_from_prompt.sh \
   --job-id 000001 \
   --save-prompt \
   --overwrite
+<!-- .md 8: El flag --save-prompt guarda el prompt para reutilizar la voz, útil para consistencia -->
 Reutilizar la misma voz en otro job
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_generate_audio_from_prompt.sh \
   --voice-name voz_finanzas \
   --job-id 000002 \
   --overwrite
+<!-- .md 9: Puedes repetir este comando para todos los jobs que quieras con la misma voz -->
 Reutilizar el prompt ya serializado
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 bash wsl/run_generate_audio_from_prompt.sh \
@@ -285,6 +294,7 @@ bash wsl/run_generate_audio_from_prompt.sh \
   --voice-name voz_finanzas \
   --voice-clone-prompt assets/voices/voz_finanzas/voice_clone_prompt.json \
   --overwrite
+<!-- .md 10: El flag --voice-clone-prompt permite especificar un prompt ya serializado -->
 12. Qué muestran los wrappers
 
 Cada wrapper imprime:
@@ -363,8 +373,10 @@ Haz esto:
 
 Diseña la voz
 bash wsl/run_design_voice.sh ...
+<!-- .md 11: Reemplaza los ... por los argumentos necesarios según tu caso -->
 Genera el primer clip y guarda el prompt
 bash wsl/run_generate_audio_from_prompt.sh --save-prompt ...
+<!-- .md 12: Asegúrate de pasar --voice-name y --job-id si corresponde -->
 Reutiliza esa misma voz en más jobs
 bash wsl/run_generate_audio_from_prompt.sh --job-id 000002 ...
 17. Recomendación práctica para este proyecto
