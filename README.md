@@ -270,3 +270,10 @@ bash wsl/run_subs.sh
 
 Si quieres forzar regeneración:
 WHISPERX_OVERWRITE=true bash wsl/run_subs.sh
+
+
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
+
+conda activate comfy
+cd C:\Users\vhgal\AppData\Local\Programs\ComfyUI\resources\ComfyUI
+python main.py --listen 127.0.0.1 --port 8188 --enable-cors-header *
