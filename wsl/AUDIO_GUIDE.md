@@ -15,6 +15,7 @@
 - La raíz principal de jobs es `VIDEO_JOBS_ROOT`, con fallback a `/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs`.
 - Los artefactos nuevos usan naming con `job_id`.
 - La voz se resuelve con precedencia: `--voice-id` → voz asignada al job → `VIDEO_DEFAULT_VOICE_ID` → fallback de compatibilidad.
+- La voz resuelta y la estrategia de síntesis son conceptos distintos: revisa `voice_mode`, `tts_strategy_default`, `tts_strategy_requested` y `tts_strategy_used`.
 - La trazabilidad de voz y audio queda en `job.json`, `status.json` y `voices/voices_index.json`.
 - El audio nuevo del job se escribe en `jobs/<job_id>/audio/<job_id>_narration.wav`.
 - El script nuevo vive en `jobs/<job_id>/source/<job_id>_script.json`.

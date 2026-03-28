@@ -151,9 +151,19 @@ def main() -> None:
             language=args.language,
             seed=args.seed,
             voice_instruct=description,
+            reference_text_file=None,
             engine="voice_design",
+            voice_mode="design_only",
+            tts_strategy_default="description_seed_preset",
+            supports_reference_conditioning=False,
+            supports_clone_prompt=False,
             voice_id=args.voice_id,
-            notes="Referencia generada con Qwen3-TTS VoiceDesign.",
+            notes=(
+                "Referencia generada con Qwen3-TTS VoiceDesign. "
+                "Esta voz queda registrada como design_only: reference.wav es un artefacto "
+                "de referencia y trazabilidad, no una garantia de condicionamiento acustico "
+                "directo en flujos posteriores."
+            ),
         )
 
         voice_dir = runtime.voices_root / record["voice_id"]
@@ -173,7 +183,12 @@ def main() -> None:
             seed=record["seed"],
             voice_instruct=record["voice_instruct"],
             reference_file=str(reference_wav),
+            reference_text_file=str(reference_txt),
             engine="voice_design",
+            voice_mode="design_only",
+            tts_strategy_default="description_seed_preset",
+            supports_reference_conditioning=False,
+            supports_clone_prompt=False,
             voice_id=record["voice_id"],
             notes=record["notes"],
         )
@@ -183,6 +198,7 @@ def main() -> None:
             assign_voice_to_job(job_paths, record, selection_mode="manual")
 
         log(f"[design_voice] voice_id={record['voice_id']}")
+        log("[design_voice] voice_mode=design_only strategy_default=description_seed_preset")
         log(f"[design_voice] Referencia guardada en {reference_wav}")
 
     except Exception as exc:

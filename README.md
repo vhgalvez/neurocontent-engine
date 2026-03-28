@@ -188,7 +188,7 @@ Ejemplo:
 
 ```json
 {
-  "render_targets": "vertical|horizontal",
+  "render_targets": ["vertical", "horizontal"],
   "default_render_target": "vertical",
   "render_vertical_requested": true,
   "render_horizontal_requested": true,
@@ -239,6 +239,7 @@ Cada voz tiene:
 - `voice_id`
 - `scope`
 - `job_id` si aplica
+- `voice_mode`
 - `voice_name`
 - `voice_description`
 - `model_name`
@@ -246,11 +247,48 @@ Cada voz tiene:
 - `seed`
 - `voice_instruct`
 - `reference_file`
+- `reference_text_file`
 - `voice_clone_prompt_path`
+- `tts_strategy_default`
+- `supports_reference_conditioning`
+- `supports_clone_prompt`
 - `status`
 - `notes`
 - `created_at`
 - `updated_at`
+
+## Semántica de voz y síntesis
+
+El sistema separa dos conceptos:
+
+- identidad vocal registrada
+- estrategia real de síntesis usada al generar audio
+
+### `voice_mode`
+
+- `design_only`: la voz se reutiliza como descripción persistente, seed y preset. `reference.wav` queda como referencia trazable, no como garantía de condicionamiento acústico directo.
+- `reference_conditioned`: la voz espera reutilizar `reference.wav` y, si existe, `reference.txt` o `reference_text_file`.
+- `clone_prompt`: la voz espera reutilizar `voice_clone_prompt_path`.
+
+### `tts_strategy_default`
+
+Expresa la estrategia pedida por defecto para esa voz:
+
+- `description_seed_preset`
+- `reference_conditioned`
+- `clone_prompt`
+- `legacy_preset_fallback`
+
+### Regla importante de UX
+
+`VIDEO_DEFAULT_VOICE_ID` solo selecciona qué voz registrada usar. No obliga por sí mismo a que el motor consuma `reference.wav`. La estrategia real depende de `voice_mode`, `tts_strategy_default` y de la capacidad del flujo de síntesis disponible.
+
+Si el flujo no puede usar la estrategia pedida, el sistema ahora:
+
+- registra la estrategia pedida
+- registra la estrategia realmente usada
+- marca si hubo fallback
+- guarda la razón del fallback en `job.json`, `status.json` y logs
 
 ### Scopes soportados
 
@@ -290,6 +328,8 @@ Ubicación principal:
   "voice": {
     "voice_id": "voice_global_0001",
     "scope": "global",
+    "voice_mode": "design_only",
+    "tts_strategy_default": "description_seed_preset",
     "selection_mode": "manual",
     "voice_name": "marca_personal_es",
     "voice_description": "Voz principal estable para la marca.",
@@ -307,6 +347,11 @@ También guarda:
 - `voice_source`
 - `audio_file`
 - `audio_generated_at`
+- `voice_mode`
+- `tts_strategy_requested`
+- `tts_strategy_used`
+- `tts_fallback_used`
+- `tts_fallback_reason`
 
 ## Flujos vocales soportados
 
@@ -365,6 +410,35 @@ Ejemplo:
 
 ```bash
 bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
+```
+
+## Logs y trazabilidad de síntesis
+
+El log de audio ya no resume todo como un simple `preset=...` cuando se resolvió una voz registrada. Ahora distingue:
+
+- `voice_id` resuelto
+- `voice_mode`
+- estrategia pedida
+- estrategia usada
+- fallback y motivo si aplica
+
+Ejemplo sin fallback:
+
+```text
+[000001] Voice resolved: voice_global_0001 mode=design_only
+[000001] Requested strategy: description_seed_preset
+[000001] Preset used: mujer_podcast_seria_35_45 (source=global_default)
+[000001] Strategy used: description_seed_preset
+[000001] Audio generado en ... con voice_id=voice_global_0001, voice_mode=design_only, strategy=description_seed_preset
+```
+
+Ejemplo con fallback:
+
+```text
+[000001] Voice resolved: voice_global_0001 mode=reference_conditioned
+[000001] Requested strategy: reference_conditioned
+[000001] Fallback strategy used: description_seed_preset
+[000001] Fallback reason: Current synthesis path could not consume reference conditioning directly: ...
 ```
 
 ## Cómo reproducir exactamente una voz
@@ -500,6 +574,7 @@ jobs/000001/
 {
   "voice_id": "voice_global_0001",
   "scope": "global",
+  "voice_mode": "design_only",
   "job_id": null,
   "voice_name": "marca_personal_es",
   "voice_description": "Voz principal estable para la marca.",
@@ -508,6 +583,10 @@ jobs/000001/
   "seed": 424242,
   "voice_instruct": "Voz madura, profesional, sobria y consistente.",
   "reference_file": "/mnt/c/.../video-dataset/voices/voice_global_0001/reference.wav",
+  "reference_text_file": "/mnt/c/.../video-dataset/voices/voice_global_0001/reference.txt",
+  "tts_strategy_default": "description_seed_preset",
+  "supports_reference_conditioning": false,
+  "supports_clone_prompt": false,
   "status": "active"
 }
 ```
@@ -544,3 +623,12 @@ Recomendación de migración:
 - `job.json` es el contrato estable del job.
 - `voice_registry.py` separa identidad vocal, asignación a job y persistencia del registry.
 - La consistencia vocal ya depende de una identidad persistida, no solo de un preset o texto suelto.
+
+
+# VOS SDPA
+
+voice over synthesis con SDPA (sin usar atención tradicional) para evitar problemas de memoria y mejorar la calidad en voces largas.
+
+```bash
+export ACCELERATE_USE_SDPA=true
+```

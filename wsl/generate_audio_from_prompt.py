@@ -18,7 +18,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 from config import configure_runtime, get_runtime_paths  # noqa: E402
 from director import update_status  # noqa: E402
 from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
-from voice_registry import assign_voice_to_job, register_voice, resolve_job_voice_assignment, safe_read_json, update_job_artifact, validate_voice_index  # noqa: E402
+from voice_registry import assign_voice_to_job, normalize_voice_record, register_voice, resolve_job_voice_assignment, safe_read_json, update_job_artifact, update_job_audio_synthesis, validate_voice_index  # noqa: E402
 
 DEFAULT_BASE_MODEL_PATH = os.getenv(
     "QWEN_TTS_BASE_MODEL_PATH",
@@ -193,7 +193,7 @@ def resolve_voice(job_paths, args: argparse.Namespace, resolved_model_path: str)
         assigned = resolve_job_voice_assignment(runtime, job_paths, explicit_voice_id=args.voice_id)
         record = assigned["record"] if assigned else None
         if record:
-            return record, assigned["selection_mode"]
+            return normalize_voice_record(record), assigned["selection_mode"]
 
     if args.reference_wav:
         record = register_voice(
@@ -207,13 +207,18 @@ def resolve_voice(job_paths, args: argparse.Namespace, resolved_model_path: str)
             seed=args.seed,
             voice_instruct="",
             reference_file=str(Path(args.reference_wav)),
+            reference_text_file=None,
+            voice_mode="reference_conditioned",
+            tts_strategy_default="reference_conditioned",
+            supports_reference_conditioning=True,
+            supports_clone_prompt=False,
             engine="voice_clone",
             voice_id=args.voice_id,
             notes="Registrada desde generate_audio_from_prompt.",
         )
         if args.job_id:
             assign_voice_to_job(job_paths, record, selection_mode="manual")
-        return record, "manual"
+        return normalize_voice_record(record), "manual"
 
     raise RuntimeError("No hay una voz resoluble. Usa --voice-id o --reference-wav.")
 
@@ -290,7 +295,12 @@ def main() -> None:
                 seed=record.get("seed"),
                 voice_instruct=record.get("voice_instruct", ""),
                 reference_file=str(reference_wav),
+                reference_text_file=None,
                 voice_clone_prompt_path=saved_prompt_path or record.get("voice_clone_prompt_path"),
+                voice_mode="clone_prompt" if (saved_prompt_path or record.get("voice_clone_prompt_path")) else "reference_conditioned",
+                tts_strategy_default="clone_prompt" if (saved_prompt_path or record.get("voice_clone_prompt_path")) else "reference_conditioned",
+                supports_reference_conditioning=True,
+                supports_clone_prompt=bool(saved_prompt_path or record.get("voice_clone_prompt_path")),
                 engine="voice_clone",
                 voice_id=record["voice_id"],
                 notes=record.get("notes", ""),
@@ -301,6 +311,20 @@ def main() -> None:
                     job_paths,
                     artifact_type="audio",
                     file_path=get_runtime_paths().to_dataset_relative(job_paths.audio),
+                    generated_at=generated_at,
+                )
+                update_job_audio_synthesis(
+                    job_paths,
+                    voice_record=updated_record,
+                    selection_mode=selection_mode,
+                    strategy_requested="clone_prompt" if updated_record.get("voice_clone_prompt_path") else "reference_conditioned",
+                    strategy_used="clone_prompt" if updated_record.get("voice_clone_prompt_path") else "reference_conditioned",
+                    fallback_used=False,
+                    fallback_reason="",
+                    engine_used="voice_clone",
+                    reference_conditioning_used=not bool(updated_record.get("voice_clone_prompt_path")),
+                    clone_prompt_used=bool(updated_record.get("voice_clone_prompt_path")),
+                    voice_preset_used="",
                     generated_at=generated_at,
                 )
                 update_status(
@@ -314,6 +338,11 @@ def main() -> None:
                     voice_selection_mode=selection_mode,
                     voice_model_name=updated_record["model_name"],
                     voice_reference_file=updated_record.get("reference_file", "") or "",
+                    voice_mode=updated_record.get("voice_mode", ""),
+                    tts_strategy_requested="clone_prompt" if updated_record.get("voice_clone_prompt_path") else "reference_conditioned",
+                    tts_strategy_used="clone_prompt" if updated_record.get("voice_clone_prompt_path") else "reference_conditioned",
+                    tts_fallback_used=False,
+                    tts_fallback_reason="",
                     audio_file=get_runtime_paths().to_dataset_relative(job_paths.audio),
                     audio_generated_at=generated_at,
                 )

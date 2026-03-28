@@ -6,11 +6,12 @@ import sys
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import soundfile as sf
 import torch
-from qwen_tts import Qwen3TTSModel
+from qwen_tts import Qwen3TTSModel, VoiceClonePromptItem
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
@@ -20,9 +21,14 @@ from director import update_status  # noqa: E402
 from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
 from voice_registry import (  # noqa: E402
     assign_voice_to_job,
+    load_job_document,
+    normalize_voice_record,
     register_voice,
     resolve_job_voice_assignment,
+    resolve_tts_strategy_default,
+    resolve_voice_mode,
     safe_read_json,
+    update_job_audio_synthesis,
     update_job_artifact,
     validate_voice_index,
 )
@@ -34,6 +40,10 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 DEFAULT_MODEL_PATH = os.getenv(
     "QWEN_TTS_MODEL_PATH",
     "/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+)
+DEFAULT_BASE_MODEL_PATH = os.getenv(
+    "QWEN_TTS_BASE_MODEL_PATH",
+    "/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-Base",
 )
 DEFAULT_LANGUAGE = os.getenv("QWEN_TTS_LANGUAGE", "Spanish")
 DEFAULT_OVERWRITE = os.getenv("QWEN_TTS_OVERWRITE", "false").lower() == "true"
@@ -101,7 +111,7 @@ def set_global_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def load_model(model_path: str, device_mode: str, use_flash_attn: bool):
+def load_model(model_path: str, device_mode: str, use_flash_attn: bool, expected_tts_model_type: str):
     resolved_model_path = resolve_model_path(model_path)
     device_map, dtype = get_device_and_dtype(device_mode)
     kwargs = {
@@ -113,8 +123,8 @@ def load_model(model_path: str, device_mode: str, use_flash_attn: bool):
     if use_flash_attn and str(device_map).startswith("cuda"):
         kwargs["attn_implementation"] = "flash_attention_2"
     model = Qwen3TTSModel.from_pretrained(resolved_model_path, **kwargs)
-    if getattr(model.model, "tts_model_type", None) != "voice_design":
-        raise RuntimeError("El modelo cargado no es VoiceDesign.")
+    if getattr(model.model, "tts_model_type", None) != expected_tts_model_type:
+        raise RuntimeError(f"El modelo cargado no es {expected_tts_model_type}.")
     return model, resolved_model_path
 
 
@@ -123,6 +133,55 @@ def resolve_generate_voice_design_method(model) -> callable:
     if not callable(method):
         raise RuntimeError("La libreria qwen_tts instalada no expone generate_voice_design().")
     return method
+
+
+def resolve_generate_voice_clone_method(model) -> callable:
+    method = getattr(model, "generate_voice_clone", None)
+    if not callable(method):
+        raise RuntimeError("La libreria qwen_tts instalada no expone generate_voice_clone().")
+    return method
+
+
+def resolve_create_voice_clone_prompt_method(model) -> callable:
+    method = getattr(model, "create_voice_clone_prompt", None)
+    if not callable(method):
+        raise RuntimeError("La libreria qwen_tts instalada no expone create_voice_clone_prompt().")
+    return method
+
+
+def serialize_prompt_items(items: list[VoiceClonePromptItem]) -> list[dict]:
+    return [
+        {
+            "ref_code": item.ref_code.detach().cpu().tolist() if item.ref_code is not None else None,
+            "ref_spk_embedding": item.ref_spk_embedding.detach().cpu().tolist(),
+            "x_vector_only_mode": bool(item.x_vector_only_mode),
+            "icl_mode": bool(item.icl_mode),
+            "ref_text": item.ref_text,
+        }
+        for item in items
+    ]
+
+
+def deserialize_prompt_items(data: list[dict]) -> list[VoiceClonePromptItem]:
+    items: list[VoiceClonePromptItem] = []
+    for row in data:
+        items.append(
+            VoiceClonePromptItem(
+                ref_code=torch.tensor(row["ref_code"], dtype=torch.long) if row.get("ref_code") is not None else None,
+                ref_spk_embedding=torch.tensor(row["ref_spk_embedding"], dtype=torch.float32),
+                x_vector_only_mode=bool(row.get("x_vector_only_mode", False)),
+                icl_mode=bool(row.get("icl_mode", False)),
+                ref_text=row.get("ref_text"),
+            )
+        )
+    return items
+
+
+def load_prompt_json(path: Path) -> list[VoiceClonePromptItem]:
+    payload = safe_read_json(path, default=None)
+    if not payload or payload.get("format") != "qwen3_voice_clone_prompt_items":
+        raise RuntimeError(f"Formato de prompt no soportado en {path}")
+    return deserialize_prompt_items(payload.get("items", []))
 
 
 def iter_job_ids(job_ids: list[str] | None) -> list[str]:
@@ -138,10 +197,44 @@ def normalize_text(value: str) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
+def read_text_file(path_value: str | None) -> str:
+    candidate = Path(str(path_value or "").strip())
+    if not candidate.exists():
+        return ""
+    return normalize_text(candidate.read_text(encoding="utf-8"))
+
+
 def read_job_script_text(job_paths) -> str:
     script_path = job_paths.script if job_paths.script.exists() else job_paths.legacy_script_candidates[0]
     payload = safe_read_json(script_path, default={}) or {}
     return normalize_text(payload.get("guion_narrado", ""))
+
+
+def resolve_requested_strategy(record: dict[str, Any]) -> str:
+    return resolve_tts_strategy_default(record)
+
+
+def build_synthesis_trace(
+    *,
+    requested: str,
+    used: str,
+    fallback_used: bool,
+    fallback_reason: str = "",
+    engine_used: str = "",
+    reference_conditioning_used: bool = False,
+    clone_prompt_used: bool = False,
+    voice_preset_used: str = "",
+) -> dict[str, Any]:
+    return {
+        "requested": requested,
+        "used": used,
+        "fallback_used": bool(fallback_used),
+        "fallback_reason": fallback_reason,
+        "engine_used": engine_used,
+        "reference_conditioning_used": bool(reference_conditioning_used),
+        "clone_prompt_used": bool(clone_prompt_used),
+        "voice_preset_used": voice_preset_used,
+    }
 
 
 def build_voice_instruction(preset_name: str, seed: int, description: str = "", identity: str = "", style: str = "") -> tuple[str, str, int]:
@@ -169,7 +262,7 @@ def resolve_or_register_voice(job_paths, explicit_voice_id: str | None, resolved
     runtime = get_runtime_paths()
     assigned = resolve_job_voice_assignment(runtime, job_paths, explicit_voice_id=explicit_voice_id)
     if assigned:
-        record = assigned["record"]
+        record = normalize_voice_record(assigned["record"])
         return record, assigned["selection_mode"]
 
     legacy_config = safe_read_json(job_paths.legacy_voice_config, default={}) or {}
@@ -196,14 +289,18 @@ def resolve_or_register_voice(job_paths, explicit_voice_id: str | None, resolved
         seed=resolved_seed,
         voice_instruct=instruct,
         voice_preset=preset_name,
+        voice_mode="design_only",
+        tts_strategy_default="legacy_preset_fallback",
+        supports_reference_conditioning=False,
+        supports_clone_prompt=False,
         engine="voice_design",
         notes="Auto-registrada desde el flujo VoiceDesign por compatibilidad.",
     )
     assign_voice_to_job(job_paths, record, selection_mode="job_auto_registered")
-    return record, "job_auto_registered"
+    return normalize_voice_record(record), "job_auto_registered"
 
 
-def generate_audio(model, text: str, instruct: str, language: str):
+def generate_audio_voice_design(model, text: str, instruct: str, language: str):
     generator = resolve_generate_voice_design_method(model)
     wavs, sample_rate = generator(
         text=text,
@@ -216,16 +313,202 @@ def generate_audio(model, text: str, instruct: str, language: str):
     return wavs[0], sample_rate
 
 
+def generate_audio_voice_clone(model, text: str, language: str, prompt_items: list[VoiceClonePromptItem]):
+    generator = resolve_generate_voice_clone_method(model)
+    wavs, sample_rate = generator(
+        text=text,
+        language=language,
+        voice_clone_prompt=prompt_items,
+        non_streaming_mode=True,
+    )
+    if not wavs:
+        raise RuntimeError("generate_voice_clone() no devolvio audio")
+    return wavs[0], sample_rate
+
+
+def build_prompt_from_reference(model, reference_wav: Path, reference_text: str):
+    create_prompt = resolve_create_voice_clone_prompt_method(model)
+    if not reference_wav.exists():
+        raise RuntimeError(f"No existe reference.wav: {reference_wav}")
+    x_vector_only_mode = not bool(normalize_text(reference_text))
+    return create_prompt(
+        ref_audio=str(reference_wav),
+        ref_text=normalize_text(reference_text) if not x_vector_only_mode else None,
+        x_vector_only_mode=x_vector_only_mode,
+    )
+
+
+def synthesize_description_seed_preset(model, text: str, language: str, record: dict[str, Any], default_preset: str, default_seed: int):
+    preset_name, instruct, resolved_seed = build_voice_instruction(
+        preset_name=record.get("voice_preset") or default_preset,
+        seed=int(record.get("seed", default_seed)),
+        description=record.get("voice_description", ""),
+    )
+    set_global_seed(resolved_seed)
+    wav, sample_rate = generate_audio_voice_design(model=model, text=text, instruct=instruct, language=language)
+    return wav, sample_rate, build_synthesis_trace(
+        requested=resolve_requested_strategy(record),
+        used="description_seed_preset",
+        fallback_used=False,
+        engine_used="voice_design",
+        reference_conditioning_used=False,
+        clone_prompt_used=False,
+        voice_preset_used=preset_name,
+    )
+
+
+def synthesize_reference_conditioned(model, text: str, language: str, record: dict[str, Any]):
+    reference_wav = Path(str(record.get("reference_file") or "").strip())
+    reference_text = read_text_file(record.get("reference_text_file"))
+    prompt_items = build_prompt_from_reference(model, reference_wav, reference_text)
+    wav, sample_rate = generate_audio_voice_clone(model=model, text=text, language=language, prompt_items=prompt_items)
+    return wav, sample_rate, build_synthesis_trace(
+        requested=resolve_requested_strategy(record),
+        used="reference_conditioned",
+        fallback_used=False,
+        engine_used="voice_clone",
+        reference_conditioning_used=True,
+        clone_prompt_used=False,
+        voice_preset_used="",
+    )
+
+
+def synthesize_clone_prompt(model, text: str, language: str, record: dict[str, Any]):
+    prompt_path = Path(str(record.get("voice_clone_prompt_path") or "").strip())
+    if not prompt_path.exists():
+        raise RuntimeError(f"No existe voice_clone_prompt_path: {prompt_path}")
+    prompt_items = load_prompt_json(prompt_path)
+    wav, sample_rate = generate_audio_voice_clone(model=model, text=text, language=language, prompt_items=prompt_items)
+    return wav, sample_rate, build_synthesis_trace(
+        requested=resolve_requested_strategy(record),
+        used="clone_prompt",
+        fallback_used=False,
+        engine_used="voice_clone",
+        reference_conditioning_used=False,
+        clone_prompt_used=True,
+        voice_preset_used="",
+    )
+
+
 def write_wav(path: Path, wav: np.ndarray, sample_rate: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(path), wav, sample_rate)
 
 
-def process_job(model, resolved_model_path: str, job_id: str, overwrite: bool, default_preset: str, default_seed: int, language: str, explicit_voice_id: str | None) -> None:
+def log_strategy_summary(job_id: str, record: dict[str, Any], trace: dict[str, Any]) -> None:
+    log(f"[{job_id}] Voice resolved: {record.get('voice_id', '')} mode={record.get('voice_mode', '')}")
+    log(f"[{job_id}] Requested strategy: {trace['requested']}")
+    if trace.get("voice_preset_used"):
+        preset_source = "voice_record" if record.get("voice_preset") else "global_default"
+        log(f"[{job_id}] Preset used: {trace['voice_preset_used']} (source={preset_source})")
+    if trace["fallback_used"]:
+        log(f"[{job_id}] Fallback strategy used: {trace['used']}")
+        log(f"[{job_id}] Fallback reason: {trace['fallback_reason']}")
+    else:
+        log(f"[{job_id}] Strategy used: {trace['used']}")
+
+
+def synthesize_audio_for_record(
+    *,
+    text: str,
+    language: str,
+    record: dict[str, Any],
+    default_preset: str,
+    default_seed: int,
+    voice_design_model,
+    base_model,
+) -> tuple[np.ndarray, int, dict[str, Any]]:
+    requested = resolve_requested_strategy(record)
+
+    if requested == "clone_prompt":
+        try:
+            return synthesize_clone_prompt(base_model, text, language, record)
+        except Exception as exc:
+            fallback_reason = (
+                "clone_prompt no pudo ejecutarse en este flujo: "
+                f"{exc}"
+            )
+            wav, sample_rate, trace = synthesize_description_seed_preset(
+                voice_design_model,
+                text,
+                language,
+                record,
+                default_preset,
+                default_seed,
+            )
+            trace.update(
+                build_synthesis_trace(
+                    requested=requested,
+                    used="description_seed_preset",
+                    fallback_used=True,
+                    fallback_reason=fallback_reason,
+                    engine_used="voice_design",
+                    reference_conditioning_used=False,
+                    clone_prompt_used=False,
+                    voice_preset_used=trace["voice_preset_used"],
+                )
+            )
+            return wav, sample_rate, trace
+
+    if requested == "reference_conditioned":
+        try:
+            return synthesize_reference_conditioned(base_model, text, language, record)
+        except Exception as exc:
+            fallback_reason = (
+                "Current synthesis path could not consume reference conditioning directly: "
+                f"{exc}"
+            )
+            wav, sample_rate, trace = synthesize_description_seed_preset(
+                voice_design_model,
+                text,
+                language,
+                record,
+                default_preset,
+                default_seed,
+            )
+            trace.update(
+                build_synthesis_trace(
+                    requested=requested,
+                    used="description_seed_preset",
+                    fallback_used=True,
+                    fallback_reason=fallback_reason,
+                    engine_used="voice_design",
+                    reference_conditioning_used=False,
+                    clone_prompt_used=False,
+                    voice_preset_used=trace["voice_preset_used"],
+                )
+            )
+            return wav, sample_rate, trace
+
+    wav, sample_rate, trace = synthesize_description_seed_preset(
+        voice_design_model,
+        text,
+        language,
+        record,
+        default_preset,
+        default_seed,
+    )
+    if requested in {"legacy_preset_fallback", "description_seed_preset"}:
+        trace["requested"] = requested
+    return wav, sample_rate, trace
+
+
+def process_job(
+    voice_design_model,
+    voice_design_model_path: str,
+    base_model,
+    job_id: str,
+    overwrite: bool,
+    default_preset: str,
+    default_seed: int,
+    language: str,
+    explicit_voice_id: str | None,
+) -> None:
     job_paths = ensure_job_structure(build_job_paths(job_id, get_runtime_paths()))
     if job_paths.audio.exists() and not overwrite:
         assigned = resolve_job_voice_assignment(get_runtime_paths(), job_paths, explicit_voice_id=explicit_voice_id)
-        record = assigned["record"] if assigned else {}
+        record = normalize_voice_record(assigned["record"]) if assigned else {}
+        audio_synthesis = load_job_document(job_paths).get("audio_synthesis", {})
         update_status(
             job_paths.status,
             audio_generated=True,
@@ -237,6 +520,11 @@ def process_job(model, resolved_model_path: str, job_id: str, overwrite: bool, d
             voice_selection_mode=assigned.get("selection_mode", "") if assigned else "",
             voice_model_name=record.get("model_name", ""),
             voice_reference_file=record.get("reference_file", "") or "",
+            voice_mode=record.get("voice_mode", ""),
+            tts_strategy_requested=audio_synthesis.get("tts_strategy_requested", ""),
+            tts_strategy_used=audio_synthesis.get("tts_strategy_used", ""),
+            tts_fallback_used=bool(audio_synthesis.get("tts_fallback_used", False)),
+            tts_fallback_reason=audio_synthesis.get("tts_fallback_reason", ""),
             audio_file=get_runtime_paths().to_dataset_relative(job_paths.audio),
         )
         return
@@ -249,19 +537,21 @@ def process_job(model, resolved_model_path: str, job_id: str, overwrite: bool, d
     record, selection_mode = resolve_or_register_voice(
         job_paths=job_paths,
         explicit_voice_id=explicit_voice_id,
-        resolved_model_path=resolved_model_path,
+        resolved_model_path=voice_design_model_path,
         default_preset=default_preset,
         default_seed=default_seed,
         language=language,
     )
-    preset_name, instruct, resolved_seed = build_voice_instruction(
-        preset_name=record.get("voice_preset") or default_preset,
-        seed=int(record.get("seed", default_seed)),
-        description=record.get("voice_description", ""),
+    wav, sample_rate, trace = synthesize_audio_for_record(
+        text=text,
+        language=language,
+        record=record,
+        default_preset=default_preset,
+        default_seed=default_seed,
+        voice_design_model=voice_design_model,
+        base_model=base_model,
     )
-
-    set_global_seed(resolved_seed)
-    wav, sample_rate = generate_audio(model=model, text=text, instruct=instruct, language=language)
+    log_strategy_summary(job_paths.job_id, record, trace)
     write_wav(job_paths.audio, wav, sample_rate)
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     update_job_artifact(
@@ -270,10 +560,24 @@ def process_job(model, resolved_model_path: str, job_id: str, overwrite: bool, d
         file_path=get_runtime_paths().to_dataset_relative(job_paths.audio),
         generated_at=generated_at,
     )
+    update_job_audio_synthesis(
+        job_paths,
+        voice_record=record,
+        selection_mode=selection_mode,
+        strategy_requested=trace["requested"],
+        strategy_used=trace["used"],
+        fallback_used=trace["fallback_used"],
+        fallback_reason=trace["fallback_reason"],
+        engine_used=trace["engine_used"],
+        reference_conditioning_used=trace["reference_conditioning_used"],
+        clone_prompt_used=trace["clone_prompt_used"],
+        voice_preset_used=trace["voice_preset_used"],
+        generated_at=generated_at,
+    )
     update_status(
         job_paths.status,
         audio_generated=True,
-        last_step="audio_generated_voice_design",
+        last_step=f"audio_generated_{trace['used']}",
         voice_id=record.get("voice_id", ""),
         voice_scope=record.get("scope", ""),
         voice_source=selection_mode,
@@ -281,10 +585,19 @@ def process_job(model, resolved_model_path: str, job_id: str, overwrite: bool, d
         voice_selection_mode=selection_mode,
         voice_model_name=record.get("model_name", ""),
         voice_reference_file=record.get("reference_file", "") or "",
+        voice_mode=record.get("voice_mode", ""),
+        tts_strategy_requested=trace["requested"],
+        tts_strategy_used=trace["used"],
+        tts_fallback_used=trace["fallback_used"],
+        tts_fallback_reason=trace["fallback_reason"],
         audio_file=get_runtime_paths().to_dataset_relative(job_paths.audio),
         audio_generated_at=generated_at,
     )
-    log(f"[{job_paths.job_id}] Audio generado en {job_paths.audio} con preset={preset_name}")
+    log(
+        f"[{job_paths.job_id}] Audio generado en {job_paths.audio} "
+        f"con voice_id={record.get('voice_id', '')}, voice_mode={record.get('voice_mode', '')}, "
+        f"strategy={trace['used']}"
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -299,6 +612,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=DEFAULT_VOICE_SEED, help="Seed por defecto.")
     parser.add_argument("--language", default=DEFAULT_LANGUAGE, help="Idioma para Qwen3-TTS.")
     parser.add_argument("--model-path", default=DEFAULT_MODEL_PATH, help="Ruta del modelo VoiceDesign.")
+    parser.add_argument("--base-model-path", default=DEFAULT_BASE_MODEL_PATH, help="Ruta del modelo Base para clone/reference.")
     parser.add_argument("--device", default=DEFAULT_DEVICE, choices=["auto", "cpu", "cuda"], help="Device.")
     parser.add_argument("--overwrite", action="store_true", default=DEFAULT_OVERWRITE, help="Sobrescribe audio.")
     parser.add_argument("--test-short", action="store_true", default=DEFAULT_TEST_SHORT, help="Prueba corta.")
@@ -310,7 +624,7 @@ def parse_args() -> argparse.Namespace:
 def run_direct_text(model, text: str, output: Path, preset: str, seed: int, language: str) -> None:
     _, instruct, resolved_seed = build_voice_instruction(preset_name=preset, seed=seed)
     set_global_seed(resolved_seed)
-    wav, sample_rate = generate_audio(model=model, text=normalize_text(text), instruct=instruct, language=language)
+    wav, sample_rate = generate_audio_voice_design(model=model, text=normalize_text(text), instruct=instruct, language=language)
     write_wav(output, wav, sample_rate)
     log(f"[audio] Clip directo generado en {output}")
 
@@ -321,20 +635,32 @@ def main() -> None:
     validate_voice_index(get_runtime_paths())
 
     try:
-        model, resolved_model_path = load_model(
+        voice_design_model, resolved_voice_design_model_path = load_model(
             model_path=args.model_path,
             device_mode=args.device,
             use_flash_attn=args.use_flash_attn,
+            expected_tts_model_type="voice_design",
         )
+        try:
+            base_model, _ = load_model(
+                model_path=args.base_model_path,
+                device_mode=args.device,
+                use_flash_attn=args.use_flash_attn,
+                expected_tts_model_type="base",
+            )
+            log(f"[audio] Base model disponible: {args.base_model_path}")
+        except Exception as base_exc:
+            base_model = None
+            log(f"[audio] Base model no disponible para clone/reference flow: {base_exc}")
 
         if args.test_short:
             output = get_runtime_paths().jobs_root / "test_short.wav"
-            run_direct_text(model=model, text=args.test_text, output=output, preset=args.preset, seed=args.seed, language=args.language)
+            run_direct_text(model=voice_design_model, text=args.test_text, output=output, preset=args.preset, seed=args.seed, language=args.language)
             return
 
         if args.text:
             output = Path(args.output) if args.output else PROJECT_DIR / "outputs" / "voice_design_preview.wav"
-            run_direct_text(model=model, text=args.text, output=output, preset=args.preset, seed=args.seed, language=args.language)
+            run_direct_text(model=voice_design_model, text=args.text, output=output, preset=args.preset, seed=args.seed, language=args.language)
             return
 
         job_ids = iter_job_ids(args.job_ids)
@@ -346,8 +672,9 @@ def main() -> None:
         for job_id in job_ids:
             try:
                 process_job(
-                    model=model,
-                    resolved_model_path=resolved_model_path,
+                    voice_design_model=voice_design_model,
+                    voice_design_model_path=resolved_voice_design_model_path,
+                    base_model=base_model,
                     job_id=job_id,
                     overwrite=args.overwrite,
                     default_preset=args.preset,

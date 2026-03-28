@@ -73,6 +73,11 @@ STATUS_DEFAULTS = {
     "voice_selection_mode": "",
     "voice_model_name": "",
     "voice_reference_file": "",
+    "voice_mode": "",
+    "tts_strategy_requested": "",
+    "tts_strategy_used": "",
+    "tts_fallback_used": False,
+    "tts_fallback_reason": "",
     "audio_file": "",
     "audio_generated_at": "",
     "render_targets": ["vertical"],
@@ -305,6 +310,7 @@ def sync_status_with_files(paths: JobPaths) -> Dict[str, Any]:
     job_document = load_job_document(paths)
     render_config = _render_config_from_job_document(job_document)
     voice = job_document.get("voice") or {}
+    audio_synthesis = job_document.get("audio_synthesis") or {}
     artifacts = job_document.get("artifacts") or {}
     audio_artifact = artifacts.get("audio") or {}
     return update_status(
@@ -321,6 +327,11 @@ def sync_status_with_files(paths: JobPaths) -> Dict[str, Any]:
         voice_selection_mode=voice.get("selection_mode", ""),
         voice_model_name=voice.get("model_name", ""),
         voice_reference_file=voice.get("reference_file", "") or "",
+        voice_mode=voice.get("voice_mode", ""),
+        tts_strategy_requested=audio_synthesis.get("tts_strategy_requested", ""),
+        tts_strategy_used=audio_synthesis.get("tts_strategy_used", ""),
+        tts_fallback_used=bool(audio_synthesis.get("tts_fallback_used", False)),
+        tts_fallback_reason=audio_synthesis.get("tts_fallback_reason", ""),
         audio_file=audio_artifact.get("file", ""),
         audio_generated_at=audio_artifact.get("generated_at", ""),
         **_render_status_fields(render_config),
