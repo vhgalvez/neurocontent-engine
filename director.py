@@ -75,7 +75,7 @@ STATUS_DEFAULTS = {
     "voice_reference_file": "",
     "audio_file": "",
     "audio_generated_at": "",
-    "render_targets": "vertical",
+    "render_targets": ["vertical"],
     "default_render_target": "vertical",
     "render_vertical_requested": True,
     "render_horizontal_requested": False,
@@ -242,7 +242,7 @@ def resolve_render_config(brief: Dict[str, Any]) -> Dict[str, Any]:
 def _render_status_fields(render_config: Dict[str, Any]) -> Dict[str, Any]:
     targets = set(render_config["targets"])
     return {
-        "render_targets": render_config["targets_csv"],
+        "render_targets": render_config["targets"],
         "default_render_target": render_config["default_target"],
         "render_vertical_requested": "vertical" in targets,
         "render_horizontal_requested": "horizontal" in targets,
@@ -265,6 +265,10 @@ def _render_config_from_job_document(job_document: Dict[str, Any]) -> Dict[str, 
 def load_status(status_path: Path) -> Dict[str, Any]:
     current = safe_read_json(status_path, default={}) or {}
     status = {**STATUS_DEFAULTS, **current}
+    if isinstance(status.get("render_targets"), str):
+        status["render_targets"] = _parse_pipe_values(status["render_targets"]) or DEFAULT_RENDER_TARGETS.copy()
+    elif not isinstance(status.get("render_targets"), list):
+        status["render_targets"] = DEFAULT_RENDER_TARGETS.copy()
     status["export_ready"] = bool(
         status["brief_created"]
         and status["script_generated"]
@@ -991,7 +995,6 @@ def build_visual_manifest(
         "platform": brief.get("plataforma", ""),
         "language": brief.get("idioma", ""),
         "duration_sec": _duration_seconds(brief),
-        "aspect_ratio": default_profile["aspect_ratio"],
         "render_targets": render_config["targets"],
         "default_render_target": default_target,
         "content_orientation": render_config["content_orientation"],
@@ -1082,6 +1085,11 @@ def write_index(rows: List[Dict[str, Any]]) -> None:
 
 def build_index_row(brief: Dict[str, Any], status: Dict[str, Any], job_id: str) -> Dict[str, Any]:
     render_config = resolve_render_config(brief)
+    status_render_targets = status.get("render_targets", render_config["targets"])
+    if isinstance(status_render_targets, list):
+        render_targets_csv = "|".join(str(item).strip() for item in status_render_targets if str(item).strip())
+    else:
+        render_targets_csv = str(status_render_targets).strip() or render_config["targets_csv"]
     return {
         "job_id": job_id,
         "source_id": str(brief.get("id", "")).strip(),
@@ -1089,7 +1097,7 @@ def build_index_row(brief: Dict[str, Any], status: Dict[str, Any], job_id: str) 
         "idea_central": brief.get("idea_central", ""),
         "platform": brief.get("plataforma", ""),
         "language": brief.get("idioma", ""),
-        "render_targets": status.get("render_targets", render_config["targets_csv"]),
+        "render_targets": render_targets_csv,
         "default_render_target": status.get("default_render_target", render_config["default_target"]),
         "content_orientation": render_config["content_orientation"],
         "brief_created": status["brief_created"],

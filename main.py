@@ -166,6 +166,8 @@ def _load_or_generate_manifest(
                 "render_profiles",
             ]
         )
+        if "aspect_ratio" in existing_manifest:
+            manifest_needs_refresh = True
         if manifest_needs_refresh:
             existing_manifest = build_visual_manifest(
                 brief=brief,
@@ -206,7 +208,7 @@ def process_brief(brief: Dict[str, Any]) -> Dict[str, Any]:
     update_status(
         paths.status,
         brief_created=True,
-        render_targets=render_config["targets_csv"],
+        render_targets=render_config["targets"],
         default_render_target=render_config["default_target"],
         render_vertical_requested="vertical" in render_config["targets"],
         render_horizontal_requested="horizontal" in render_config["targets"],
@@ -234,7 +236,7 @@ def build_error_index_row(brief: Dict[str, Any], message: str) -> Dict[str, Any]
         brief_created=True,
         script_generated=first_existing_path(paths.script, paths.legacy_script_candidates).exists(),
         visual_manifest_generated=first_existing_path(paths.manifest, paths.legacy_manifest_candidates).exists(),
-        render_targets=render_config["targets_csv"],
+        render_targets=render_config["targets"],
         default_render_target=render_config["default_target"],
         render_vertical_requested="vertical" in render_config["targets"],
         render_horizontal_requested="horizontal" in render_config["targets"],
