@@ -1,20 +1,67 @@
-# config.py
-
 import os
-from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-JOBS_DIR = BASE_DIR / "jobs"
-WSL_DIR = BASE_DIR / "wsl"
+from job_paths import JOB_ID_WIDTH, build_runtime_paths
 
-DATA_FILE = DATA_DIR / "ideas.csv"
-INDEX_FILE = DATA_DIR / "index.csv"
+BASE_DIR = None
+DATA_DIR = None
+DATASET_ROOT = None
+JOBS_DIR = None
+VOICES_DIR = None
+VOICES_INDEX_FILE = None
+WSL_DIR = None
+DATA_FILE = None
+INDEX_FILE = None
+_RUNTIME_PATHS = None
 
-JOB_ID_WIDTH = 6
+
+def _refresh_runtime_globals() -> None:
+    global BASE_DIR
+    global DATA_DIR
+    global DATASET_ROOT
+    global JOBS_DIR
+    global VOICES_DIR
+    global VOICES_INDEX_FILE
+    global WSL_DIR
+    global DATA_FILE
+    global INDEX_FILE
+
+    runtime = get_runtime_paths()
+    BASE_DIR = runtime.base_dir
+    DATA_DIR = runtime.data_dir
+    DATASET_ROOT = runtime.dataset_root
+    JOBS_DIR = runtime.jobs_root
+    VOICES_DIR = runtime.voices_root
+    VOICES_INDEX_FILE = runtime.voices_index_file
+    WSL_DIR = runtime.wsl_dir
+    DATA_FILE = runtime.data_file
+    INDEX_FILE = runtime.index_file
+
+
+def configure_runtime(
+    *,
+    dataset_root: str | os.PathLike[str] | None = None,
+    jobs_root: str | os.PathLike[str] | None = None,
+):
+    global _RUNTIME_PATHS
+    _RUNTIME_PATHS = build_runtime_paths(
+        dataset_root=dataset_root,
+        jobs_root=jobs_root,
+    )
+    _refresh_runtime_globals()
+    return _RUNTIME_PATHS
+
+
+def get_runtime_paths():
+    global _RUNTIME_PATHS
+    if _RUNTIME_PATHS is None:
+        _RUNTIME_PATHS = build_runtime_paths()
+        _refresh_runtime_globals()
+    return _RUNTIME_PATHS
+
+
+get_runtime_paths()
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-
 MODEL = "qwen3:8b"
 
 OPTIONS = {
