@@ -22,6 +22,8 @@ from voice_registry import (  # noqa: E402
     register_voice,
     resolve_job_voice_assignment,
     safe_read_json,
+    update_job_artifact,
+    validate_voice_index,
 )
 
 os.environ["ORT_LOGGING_LEVEL"] = "3"
@@ -229,10 +231,12 @@ def process_job(model, resolved_model_path: str, job_id: str, overwrite: bool, d
             last_step="audio_skipped_existing",
             voice_id=record.get("voice_id", ""),
             voice_scope=record.get("scope", ""),
+            voice_source=(assigned.get("selection_mode", "") if assigned else ""),
             voice_name=record.get("voice_name", ""),
             voice_selection_mode=assigned.get("selection_mode", "") if assigned else "",
             voice_model_name=record.get("model_name", ""),
             voice_reference_file=record.get("reference_file", "") or "",
+            audio_file=get_runtime_paths().to_dataset_relative(job_paths.audio),
         )
         return
 
@@ -258,16 +262,26 @@ def process_job(model, resolved_model_path: str, job_id: str, overwrite: bool, d
     set_global_seed(resolved_seed)
     wav, sample_rate = generate_audio(model=model, text=text, instruct=instruct, language=language)
     write_wav(job_paths.audio, wav, sample_rate)
+    generated_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).replace(microsecond=0).isoformat()
+    update_job_artifact(
+        job_paths,
+        artifact_type="audio",
+        file_path=get_runtime_paths().to_dataset_relative(job_paths.audio),
+        generated_at=generated_at,
+    )
     update_status(
         job_paths.status,
         audio_generated=True,
         last_step="audio_generated_voice_design",
         voice_id=record.get("voice_id", ""),
         voice_scope=record.get("scope", ""),
+        voice_source=selection_mode,
         voice_name=record.get("voice_name", ""),
         voice_selection_mode=selection_mode,
         voice_model_name=record.get("model_name", ""),
         voice_reference_file=record.get("reference_file", "") or "",
+        audio_file=get_runtime_paths().to_dataset_relative(job_paths.audio),
+        audio_generated_at=generated_at,
     )
     log(f"[{job_paths.job_id}] Audio generado en {job_paths.audio} con preset={preset_name}")
 
@@ -303,6 +317,7 @@ def run_direct_text(model, text: str, output: Path, preset: str, seed: int, lang
 def main() -> None:
     args = parse_args()
     configure_runtime(dataset_root=args.dataset_root, jobs_root=args.jobs_root)
+    validate_voice_index(get_runtime_paths())
 
     try:
         model, resolved_model_path = load_model(
