@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 
-# wsl\create_video_jobs.sh
 set -euo pipefail
 
-DATASET_ROOT="/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset"
-JOBS_ROOT="${DATASET_ROOT}/jobs"
-
+DATASET_ROOT="${VIDEO_DATASET_ROOT:-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset}"
+JOBS_ROOT="${VIDEO_JOBS_ROOT:-${DATASET_ROOT}/jobs}"
 DEFAULT_JOBS=("000001" "000002" "000003")
 
 if [ "$#" -gt 0 ]; then
@@ -20,34 +18,25 @@ create_job() {
   local job_id="$1"
   local job_root="${JOBS_ROOT}/${job_id}"
 
-  echo "Creando job: ${job_id}"
-
-  mkdir -p "${job_root}/source"
-  mkdir -p "${job_root}/audio"
-  mkdir -p "${job_root}/subtitles"
-  mkdir -p "${job_root}/images/previews"
-  mkdir -p "${job_root}/videos/previews"
-  mkdir -p "${job_root}/timeline/vertical"
-  mkdir -p "${job_root}/timeline/horizontal"
-  mkdir -p "${job_root}/output/vertical"
-  mkdir -p "${job_root}/output/horizontal"
-  mkdir -p "${job_root}/logs"
-  mkdir -p "${job_root}/tmp/comfy"
-  mkdir -p "${job_root}/tmp/render"
+  mkdir -p "${job_root}/source" "${job_root}/audio" "${job_root}/subtitles" "${job_root}/logs"
 
   if [ ! -f "${job_root}/job.json" ]; then
     cat > "${job_root}/job.json" <<EOF
 {
   "job_id": "${job_id}",
-  "job_schema_version": "1.0",
-  "title": "",
-  "language": "es",
-  "content_type": "short_form",
-  "render_targets": ["vertical"],
-  "default_target": "vertical",
+  "job_schema_version": "2.0",
   "created_at": "",
   "updated_at": "",
-  "pipeline_version": "v1"
+  "voice": {},
+  "paths": {
+    "brief": "jobs/${job_id}/source/${job_id}_brief.json",
+    "script": "jobs/${job_id}/source/${job_id}_script.json",
+    "visual_manifest": "jobs/${job_id}/source/${job_id}_visual_manifest.json",
+    "rendered_comfy_workflow": "jobs/${job_id}/source/${job_id}_rendered_comfy_workflow.json",
+    "audio": "jobs/${job_id}/audio/${job_id}_narration.wav",
+    "subtitles": "jobs/${job_id}/subtitles/${job_id}_narration.srt",
+    "logs_dir": "jobs/${job_id}/logs"
+  }
 }
 EOF
   fi
@@ -55,31 +44,27 @@ EOF
   if [ ! -f "${job_root}/status.json" ]; then
     cat > "${job_root}/status.json" <<EOF
 {
-  "brief_ready": false,
-  "script_ready": false,
-  "audio_ready": false,
-  "subtitles_ready": false,
-  "visual_manifest_ready": false,
-  "images_ready": false,
-  "videos_ready": false,
-  "timeline_vertical_ready": false,
-  "timeline_horizontal_ready": false,
-  "render_vertical_done": false,
-  "render_horizontal_done": false,
+  "brief_created": false,
+  "script_generated": false,
+  "audio_generated": false,
+  "subtitles_generated": false,
+  "visual_manifest_generated": false,
+  "export_ready": false,
   "last_step": "created",
-  "last_error": null,
-  "updated_at": ""
+  "updated_at": "",
+  "voice_id": "",
+  "voice_scope": "",
+  "voice_name": "",
+  "voice_selection_mode": "",
+  "voice_model_name": "",
+  "voice_reference_file": ""
 }
 EOF
   fi
-
-  echo "OK -> ${job_root}"
-  echo
 }
 
 for job_id in "${JOB_IDS[@]}"; do
   create_job "${job_id}"
 done
 
-echo "Estructura creada en:"
-echo "${JOBS_ROOT}"
+echo "Estructura creada en: ${JOBS_ROOT}"

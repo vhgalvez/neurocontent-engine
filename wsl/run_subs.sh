@@ -13,12 +13,16 @@ WRAPPER_PYTHON="${WRAPPER_PYTHON:-python3}"
 
 # Python real de WhisperX
 WHISPERX_PYTHON="${WHISPERX_PYTHON:-$DEFAULT_WHISPERX_PYTHON}"
+VIDEO_DATASET_ROOT="${VIDEO_DATASET_ROOT:-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset}"
+VIDEO_JOBS_ROOT="${VIDEO_JOBS_ROOT:-$VIDEO_DATASET_ROOT/jobs}"
 
 cd "$PROJECT_DIR"
 
 echo "Proyecto: $PROJECT_DIR"
 echo "Wrapper python: $WRAPPER_PYTHON"
 echo "WhisperX python: $WHISPERX_PYTHON"
+echo "Dataset root: $VIDEO_DATASET_ROOT"
+echo "Jobs root: $VIDEO_JOBS_ROOT"
 
 unset PYTHONPATH || true
 
@@ -34,4 +38,4 @@ if [ ! -x "$WHISPERX_PYTHON" ]; then
 fi
 
 echo "Generando subtítulos por job..."
-WHISPERX_PYTHON="$WHISPERX_PYTHON" "$WRAPPER_PYTHON" wsl/generar_subtitulos.py
+VIDEO_DATASET_ROOT="$VIDEO_DATASET_ROOT" VIDEO_JOBS_ROOT="$VIDEO_JOBS_ROOT" WHISPERX_PYTHON="$WHISPERX_PYTHON" "$WRAPPER_PYTHON" wsl/generar_subtitulos.py

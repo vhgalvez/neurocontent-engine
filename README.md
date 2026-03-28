@@ -1,286 +1,364 @@
 # NeuroContent Engine
 
-`neurocontent-engine` es un pipeline editorial y de preproduccion para short-form content. Su alcance termina en artefactos por job:
+`neurocontent-engine` es un pipeline editorial y de preproducción para short-form content. El repositorio genera y mantiene artefactos por job, pero la raíz principal de esos artefactos ya no vive dentro del repo: vive en el dataset externo.
 
-1. `brief.json`
-2. `script.json`
-3. `audio/narration.wav`
-4. `subtitles/narration.srt`
-5. `visual_manifest.json`
+## Dataset y resolución de rutas
 
-Este repositorio no genera video final. No renderiza escenas. No ejecuta ComfyUI. No ejecuta Wan 2.2. No monta ni exporta piezas finales.
+Resolución de prioridad:
 
-## Responsabilidad del repositorio
+1. argumentos CLI
+2. variables de entorno
+3. fallback por defecto:
+   `/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset`
 
-Lee briefs desde `data/ideas.csv`, genera guiones con Ollama, prepara narracion para TTS, genera audio en WSL2 con Qwen3-TTS, genera subtitulos en WSL2 con WhisperX y deja un `visual_manifest.json` listo para otro repositorio visual downstream.
+Variables soportadas:
 
-## Arquitectura
+- `VIDEO_DATASET_ROOT`
+- `VIDEO_JOBS_ROOT`
+- `VIDEO_DEFAULT_VOICE_ID`
+
+Defaults efectivos:
+
+- dataset root: `/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset`
+- jobs root: `/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs`
+
+El repo mantiene compatibilidad razonable de lectura con `jobs/<job_id>/` dentro del propio proyecto, pero la escritura nueva apunta al dataset externo.
+
+## Nueva estructura de jobs
 
 ```text
-neurocontent-engine/
-├── data/
-│   ├── ideas.csv
-│   └── index.csv
+video-dataset/
 ├── jobs/
 │   └── 000001/
-│       ├── brief.json
-│       ├── script.json
+│       ├── job.json
 │       ├── status.json
-│       ├── visual_manifest.json
+│       ├── source/
+│       │   ├── 000001_brief.json
+│       │   ├── 000001_script.json
+│       │   ├── 000001_visual_manifest.json
+│       │   └── 000001_rendered_comfy_workflow.json
 │       ├── audio/
-│       │   └── narration.wav
-│       └── subtitles/
-│           └── narration.srt
-├── wsl/
-│   ├── generar_audio_qwen.py
-│   ├── generar_subtitulos.py
-│   ├── run_audio.sh
-│   ├── run_subs.sh
-│   └── run_wsl_pipeline.sh
-├── config.py
-├── director.py
-├── main.py
-└── prompts.py
+│       │   └── 000001_narration.wav
+│       ├── subtitles/
+│       │   └── 000001_narration.srt
+│       └── logs/
+│           ├── 000001_phase_editorial.log
+│           ├── 000001_phase_audio.log
+│           └── 000001_phase_subtitles.log
+└── voices/
+    ├── voice_global_0001/
+    │   ├── voice.json
+    │   ├── reference.wav
+    │   ├── reference.txt
+    │   └── voice_clone_prompt.json
+    └── voices_index.json
 ```
 
-## Fuente de verdad
+## Naming por `job_id`
 
-- `data/ideas.csv` es la fuente editorial de verdad
-- `jobs/<id>/` es la unidad de proceso y trazabilidad
-- `data/index.csv` es solo un indice derivado y reconstruible
+Todos los artefactos nuevos del job usan el mismo `job_id` en el nombre:
 
-Eso implica que si el CSV cambia, `brief.json` se vuelve a sincronizar desde el CSV. En cambio `script.json` y `visual_manifest.json` no se regeneran si ya existen, salvo overwrite explicito.
+- `jobs/000001/source/000001_brief.json`
+- `jobs/000001/source/000001_script.json`
+- `jobs/000001/source/000001_visual_manifest.json`
+- `jobs/000001/source/000001_rendered_comfy_workflow.json`
+- `jobs/000001/audio/000001_narration.wav`
+- `jobs/000001/subtitles/000001_narration.srt`
+- `jobs/000001/logs/000001_phase_editorial.log`
 
-## Ejecucion
+`job.json` y `status.json` mantienen nombre fijo porque son el contrato estable del directorio del job.
 
-### Windows: pipeline editorial
+## Voz: arquitectura nueva
 
-Ejecuta desde la raiz:
+La identidad vocal ahora se trata como un recurso registrable y trazable.
+
+Cada voz tiene:
+
+- `voice_id`
+- `scope`
+- `job_id` si aplica
+- `voice_name`
+- `voice_description`
+- `model_name`
+- `language`
+- `seed`
+- `voice_instruct`
+- `reference_file`
+- `voice_clone_prompt_path`
+- `status`
+- `notes`
+- `created_at`
+- `updated_at`
+
+### Scopes soportados
+
+`global`
+
+- una voz reutilizable entre jobs
+- ejemplo: `voice_global_0001`
+
+`job`
+
+- una voz específica para un job
+- ejemplo: `voice_job_000001_0001`
+
+## Registry de voces
+
+Ubicación principal:
+
+- `video-dataset/voices/voices_index.json`
+- `video-dataset/voices/<voice_id>/voice.json`
+
+`job.json` guarda qué voz quedó asignada al job:
+
+```json
+{
+  "voice": {
+    "voice_id": "voice_global_0001",
+    "scope": "global",
+    "selection_mode": "manual",
+    "voice_name": "marca_personal_es",
+    "voice_description": "Voz principal estable para la marca.",
+    "model_name": "/mnt/d/.../Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "language": "Spanish",
+    "seed": 424242,
+    "reference_file": "/mnt/c/.../video-dataset/voices/voice_global_0001/reference.wav"
+  }
+}
+```
+
+`status.json` replica los campos clave de trazabilidad para ver rápidamente qué voz se usó sin abrir todo el registry.
+
+## Flujos vocales soportados
+
+### Flujo 1: voz global estable
+
+1. crear una voz global una sola vez
+2. registrar esa voz con `voice_global_0001`
+3. asignarla a jobs por `voice_id`
+4. reutilizar siempre la misma identidad
+
+Ejemplo:
+
+```bash
+bash wsl/run_design_voice.sh --scope global --voice-name marca_personal_es --assign-to-job false
+```
+
+Después puedes usarla en un job:
+
+```bash
+bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
+```
+
+O dejarla como default global:
+
+```bash
+export VIDEO_DEFAULT_VOICE_ID="voice_global_0001"
+bash wsl/run_audio.sh --job-id 000001
+```
+
+### Flujo 2: voz individual por job
+
+1. crear o auto-registrar una voz de job
+2. guardarla como `voice_job_<job_id>_<nnnn>`
+3. asignarla al `job.json`
+4. reutilizarla siempre dentro de ese job
+
+Ejemplo explícito:
+
+```bash
+bash wsl/run_design_voice.sh --scope job --job-id 000001 --voice-name campaña_a --assign-to-job
+```
+
+Ejemplo por compatibilidad:
+
+- si el job no tiene voz asignada y lanzas `run_audio.sh`
+- el sistema puede auto-registrar una voz `job` desde el preset/seed actual
+- la asignación queda persistida en `job.json`
+
+### Flujo 3: selección manual de voz existente
+
+1. localizar un `voice_id` del registry
+2. pasarlo por CLI
+3. el job queda ligado a esa voz
+
+Ejemplo:
+
+```bash
+bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
+```
+
+## Cómo reproducir exactamente una voz
+
+Para reproducibilidad necesitas revisar:
+
+1. `jobs/<job_id>/job.json`
+2. `jobs/<job_id>/status.json`
+3. `voices/<voice_id>/voice.json`
+
+Campos críticos:
+
+- `voice_id`
+- `scope`
+- `model_name`
+- `seed`
+- `voice_instruct`
+- `reference_file`
+- `voice_clone_prompt_path`
+- `selection_mode`
+
+## Ejecución
+
+### Editorial
+
+Desde la raíz:
 
 ```bash
 python main.py
 ```
 
-Para cada fila con `estado=pending`, el pipeline:
-
-1. sincroniza `jobs/<id_padded>/brief.json` desde el CSV
-2. genera o reutiliza `jobs/<id_padded>/script.json`
-3. genera o reutiliza `jobs/<id_padded>/visual_manifest.json`
-4. actualiza `jobs/<id_padded>/status.json`
-5. reconstruye `data/index.csv`
-
-### WSL2: audio y subtitulos
-
-Primera vez:
+Con override de dataset:
 
 ```bash
-cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
+python main.py --dataset-root /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset
 ```
+
+Solo un job:
 
 ```bash
-chmod +x wsl/run_audio.sh wsl/run_subs.sh wsl/run_wsl_pipeline.sh
+python main.py --job-id 000001
 ```
 
-Audio:
+### Audio VoiceDesign
 
 ```bash
-bash wsl/run_audio.sh
+bash wsl/run_audio.sh --job-id 000001
 ```
 
-Subtitulos:
+Con selección manual de voz:
 
 ```bash
-bash wsl/run_subs.sh
+bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
 ```
 
-Pipeline completo:
+### Diseñar y registrar voz
+
+Voz global:
 
 ```bash
-bash wsl/run_wsl_pipeline.sh all
+bash wsl/run_design_voice.sh \
+  --scope global \
+  --voice-name marca_personal_es \
+  --description "Voz madura, profesional y sobria para la marca." \
+  --reference-text "Hola, esta es la voz oficial de la marca."
 ```
 
-Modos soportados por `wsl/run_wsl_pipeline.sh`:
+Voz de job:
 
-- `all`
-- `audio`
-- `subs`
+```bash
+bash wsl/run_design_voice.sh \
+  --scope job \
+  --job-id 000001 \
+  --voice-name campaña_a \
+  --description "Voz específica de campaña." \
+  --reference-text "Hola, esta es la voz de esta campaña." \
+  --assign-to-job
+```
 
-## Idempotencia
+### Audio por clone prompt
 
-El pipeline es idempotente por artefacto.
+```bash
+bash wsl/run_generate_audio_from_prompt.sh \
+  --job-id 000001 \
+  --voice-id voice_global_0001 \
+  --overwrite
+```
 
-- `brief.json` se sincroniza siempre desde el CSV
-- `script.json` se reutiliza si ya existe
-- `visual_manifest.json` se reutiliza si ya existe
-- `audio/narration.wav` se reutiliza si ya existe
-- `subtitles/narration.srt` se reutiliza si ya existe
+O registrando manualmente desde un `reference.wav`:
 
-Overwrite explicito:
+```bash
+bash wsl/run_generate_audio_from_prompt.sh \
+  --job-id 000001 \
+  --reference-wav /mnt/c/ruta/a/reference.wav \
+  --reference-text "Texto exacto del reference.wav" \
+  --save-prompt \
+  --overwrite
+```
 
-- `NC_OVERWRITE_ALL=true`
-- `NC_OVERWRITE_SCRIPT=true`
-- `NC_OVERWRITE_MANIFEST=true`
-- `QWEN_TTS_OVERWRITE=true`
-- `WHISPERX_OVERWRITE=true`
+### Subtítulos
 
-## Artefactos por job
+```bash
+bash wsl/run_subs.sh --job-id 000001
+```
 
-### `brief.json`
+## Ejemplo concreto de job `000001`
 
-Instantanea del brief editorial tomada desde `data/ideas.csv`. Sirve para trazabilidad y reproceso.
+```text
+jobs/000001/
+├── job.json
+├── status.json
+├── source/
+│   ├── 000001_brief.json
+│   ├── 000001_script.json
+│   ├── 000001_visual_manifest.json
+│   └── 000001_rendered_comfy_workflow.json
+├── audio/
+│   └── 000001_narration.wav
+├── subtitles/
+│   └── 000001_narration.srt
+└── logs/
+    ├── 000001_phase_editorial.log
+    ├── 000001_phase_audio.log
+    └── 000001_phase_subtitles.log
+```
 
-### `script.json`
+## Ejemplo concreto de voz global
 
-Contiene:
+```json
+{
+  "voice_id": "voice_global_0001",
+  "scope": "global",
+  "job_id": null,
+  "voice_name": "marca_personal_es",
+  "voice_description": "Voz principal estable para la marca.",
+  "model_name": "/mnt/d/.../Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "language": "Spanish",
+  "seed": 424242,
+  "voice_instruct": "Voz madura, profesional, sobria y consistente.",
+  "reference_file": "/mnt/c/.../video-dataset/voices/voice_global_0001/reference.wav",
+  "status": "active"
+}
+```
 
-- `hook`
-- `problema`
-- `explicacion`
-- `solucion`
-- `cierre`
-- `cta`
-- `guion_narrado`
+## Migración desde la estructura anterior
 
-`guion_narrado` lo produce el LLM como una narracion coherente y natural para TTS. No debe ser una concatenacion mecanica de bloques. El pipeline valida eso y reintenta si la salida parece demasiado pegada o poco fluida.
+Compatibilidad actual:
 
-### `status.json`
+- lectura legacy de `jobs/<job_id>/brief.json`
+- lectura legacy de `jobs/<job_id>/script.json`
+- lectura legacy de `jobs/<job_id>/visual_manifest.json`
+- lectura legacy de `jobs/<job_id>/audio/narration.wav`
+- lectura legacy de `jobs/<job_id>/subtitles/narration.srt`
+- lectura legacy de `jobs/<job_id>/voice.json`
 
-Campos minimos:
+Nuevo comportamiento:
 
-- `brief_created`
-- `script_generated`
-- `audio_generated`
-- `subtitles_generated`
-- `visual_manifest_generated`
-- `export_ready`
-- `last_step`
-- `updated_at`
+- la escritura nueva usa `source/`, `audio/`, `subtitles/`, `logs/`
+- el naming nuevo usa `job_id` en todos los artefactos del job
+- la voz ya no queda como texto libre suelto: queda registrada y asignada
 
-### `visual_manifest.json`
+Recomendación de migración:
 
-Es el contrato de handoff hacia el repositorio visual downstream. Incluye:
+1. definir `VIDEO_DATASET_ROOT`
+2. crear la estructura con `bash wsl/create_video_jobs.sh`
+3. ejecutar `python main.py`
+4. ejecutar audio/subs con los wrappers WSL
+5. revisar `job.json`, `status.json` y `voices/voices_index.json`
 
-- `manifest_version`
-- `pipeline_role`
-- `downstream_target`
-- `id`
-- `title`
-- `platform`
-- `language`
-- `duration_sec`
-- `aspect_ratio`
-- `brief_context`
-- `script_context`
-- `assets`
-- `visual_style`
-- `character_design`
-- `edit_guidance`
-- `scene_plan`
+## Comentarios de diseño
 
-`scene_plan` no es un split trivial del texto. Se construye como beats narrativos: hook, problema, explicacion, pasos de solucion, cierre y CTA, con continuidad de personaje, tiempos, transiciones y bases de prompt separadas para ComfyUI y Wan.
-
-## Contrato con el repositorio visual
-
-El repositorio visual downstream debe tratar `visual_manifest.json` como especificacion editorial y de preproduccion.
-
-Debe consumir:
-
-1. `assets.audio` como pista canonica de narracion
-2. `assets.subtitles` como referencia de captions y timing
-3. `script_context.guion_narrado` como contexto narrativo completo
-4. `character_design` como ancla de continuidad visual entre escenas
-5. `scene_plan` como beats visuales y base para prompts de ComfyUI o Wan 2.2
-6. `visual_style` y `brief_context` para mantener coherencia de tono, audiencia y direccion
-
-No debe asumir que este repositorio entrega video, timeline final ni composicion multimodal cerrada. Ese trabajo pertenece al repositorio visual downstream.
-
-## Guía de consumo downstream
-
-Uso recomendado del repo visual:
-
-1. cargar `visual_manifest.json`
-2. abrir `assets.audio` y `assets.subtitles`
-3. respetar `character_design` para no romper continuidad de sujeto, tono y presencia
-4. mapear cada item de `scene_plan` a una escena o beat de edicion usando `start_sec` y `end_sec`
-5. usar `comfy_prompt_base` para pipelines de imagen o edicion en ComfyUI
-6. usar `wan_prompt_base` para beats de movimiento o video en Wan 2.2
-7. sincronizar cortes, overlays y captions contra audio y subtitulos
-8. ensamblar el video final fuera de este repositorio
-
-## Variables de entorno utiles
-
-### Editorial pipeline
-
-- `NC_OLLAMA_MAX_RETRIES`
-- `NC_OVERWRITE_ALL`
-- `NC_OVERWRITE_SCRIPT`
-- `NC_OVERWRITE_MANIFEST`
-
-### Qwen3-TTS
-
-- `QWEN_PYTHON`
-- `QWEN_TTS_MODEL_PATH`
-- `QWEN_TTS_VOICE_INSTRUCT`
-- `QWEN_TTS_LANGUAGE`
-- `QWEN_TTS_OVERWRITE`
-- `QWEN_TTS_DEVICE`
-- `QWEN_TTS_USE_FLASH_ATTN`
-- `QWEN_TTS_TEST_SHORT`
-
-### WhisperX
-
-- `WHISPERX_PYTHON`
-- `WHISPERX_BIN`
-- `WHISPERX_MODEL`
-- `WHISPERX_LANGUAGE`
-- `WHISPERX_DEVICE`
-- `WHISPERX_COMPUTE_TYPE`
-- `WHISPERX_OVERWRITE`
-
-## Verificacion rapida
-
-1. Ejecutar `python main.py`
-2. Revisar `jobs/000001/brief.json`
-3. Revisar `jobs/000001/script.json`
-4. Revisar `jobs/000001/visual_manifest.json`
-5. En WSL2 ejecutar `bash wsl/run_wsl_pipeline.sh all`
-6. Comprobar `jobs/000001/audio/narration.wav`
-7. Comprobar `jobs/000001/subtitles/narration.srt`
-
-
-
-$env:NC_OVERWRITE_SCRIPT="true"
-$env:NC_OVERWRITE_MANIFEST="true"
-& C:\Users\vhgal\AppData\Local\Python\pythoncore-3.14-64\python.exe c:/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine/main.py
-
-
-cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
-chmod +x wsl/run_subs.sh
-bash wsl/run_subs.sh
-
- ls -1 /mnt/d/AI_Models/huggingface/hub | grep "models--Qwen--Qwen3-TTS"
-
-
-# Reinstalación limpia de WhisperX (CPU → GPU)
-
-## 1. Borrar entorno previo
-
-
-bash wsl/run_subs.sh
-
-Si quieres forzar regeneración:
-WHISPERX_OVERWRITE=true bash wsl/run_subs.sh
-
-
-cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
-
-conda activate comfy
-cd C:\Users\vhgal\AppData\Local\Programs\ComfyUI\resources\ComfyUI
-python main.py --listen 127.0.0.1 --port 8188 --enable-cors-header *
-
-
-
-
-chmod +x /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/create_video_jobs.sh
-
-bash /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/create_video_jobs.sh
+- La resolución de paths vive centralizada en `job_paths.py` y `config.py`.
+- `main.py` y `director.py` ya no asumen que `jobs/` del repo es la raíz principal.
+- `job.json` es el contrato estable del job.
+- `voice_registry.py` separa identidad vocal, asignación a job y persistencia del registry.
+- La consistencia vocal ya depende de una identidad persistida, no solo de un preset o texto suelto.

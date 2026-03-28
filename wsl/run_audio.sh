@@ -32,6 +32,8 @@ export QWEN_TTS_DEVICE="${QWEN_TTS_DEVICE:-auto}"
 export QWEN_TTS_TEST_SHORT="${QWEN_TTS_TEST_SHORT:-false}"
 export QWEN_TTS_TEST_TEXT="${QWEN_TTS_TEST_TEXT:-Probando sistema de audio con Qwen3 TTS.}"
 export QWEN_TTS_USE_FLASH_ATTN="${QWEN_TTS_USE_FLASH_ATTN:-false}"
+export VIDEO_DATASET_ROOT="${VIDEO_DATASET_ROOT:-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset}"
+export VIDEO_JOBS_ROOT="${VIDEO_JOBS_ROOT:-$VIDEO_DATASET_ROOT/jobs}"
 export PYTHONUNBUFFERED=1
 
 echo "Proyecto: $PROJECT_DIR"
@@ -40,6 +42,8 @@ echo "Modelo usado: $QWEN_TTS_MODEL_PATH"
 echo "Device: $QWEN_TTS_DEVICE"
 echo "Preset global: $QWEN_TTS_VOICE_PRESET"
 echo "Seed global: $QWEN_TTS_SEED"
+echo "Dataset root: $VIDEO_DATASET_ROOT"
+echo "Jobs root: $VIDEO_JOBS_ROOT"
 
 if [ ! -x "$QWEN_PYTHON" ]; then
     echo "ERROR: no existe Python ejecutable en $QWEN_PYTHON" >&2

@@ -24,12 +24,16 @@ load_env_file "$VOICE_ENV_FILE"
 
 export QWEN_TTS_BASE_MODEL_PATH="${QWEN_TTS_BASE_MODEL_PATH:-/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-Base}"
 export QWEN_TTS_DEVICE="${QWEN_TTS_DEVICE:-auto}"
+export VIDEO_DATASET_ROOT="${VIDEO_DATASET_ROOT:-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset}"
+export VIDEO_JOBS_ROOT="${VIDEO_JOBS_ROOT:-$VIDEO_DATASET_ROOT/jobs}"
 export PYTHONUNBUFFERED=1
 
 echo "Proyecto: $PROJECT_DIR"
 echo "Python usado: $QWEN_PYTHON"
 echo "Modelo usado: $QWEN_TTS_BASE_MODEL_PATH"
 echo "Device: $QWEN_TTS_DEVICE"
+echo "Dataset root: $VIDEO_DATASET_ROOT"
+echo "Jobs root: $VIDEO_JOBS_ROOT"
 
 if [ ! -x "$QWEN_PYTHON" ]; then
     echo "ERROR: no existe Python ejecutable en $QWEN_PYTHON" >&2

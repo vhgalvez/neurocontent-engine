@@ -1,11 +1,20 @@
+import argparse
 import csv
 from typing import Any, Dict, List
 
-from config import DATA_FILE, JOBS_DIR, OVERWRITE_MANIFEST, OVERWRITE_SCRIPT
+from config import (
+    DATA_FILE,
+    OVERWRITE_MANIFEST,
+    OVERWRITE_SCRIPT,
+    configure_runtime,
+    get_runtime_paths,
+)
 from director import (
     OllamaError,
     build_index_row,
     build_visual_manifest,
+    ensure_job_metadata,
+    generate_script,
     get_job_paths,
     pad_job_id,
     safe_read_json,
@@ -14,8 +23,8 @@ from director import (
     update_status,
     validate_script_data,
     write_index,
-    generate_script,
 )
+from job_paths import first_existing_path
 
 REQUIRED_COLUMNS = {
     "id",
@@ -58,6 +67,19 @@ REQUIRED_COLUMNS = {
 }
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Pipeline editorial de NeuroContent Engine.")
+    parser.add_argument("--dataset-root", help="Override para VIDEO_DATASET_ROOT.")
+    parser.add_argument("--jobs-root", help="Override para VIDEO_JOBS_ROOT.")
+    parser.add_argument(
+        "--job-id",
+        action="append",
+        dest="job_ids",
+        help="Procesa solo los jobs indicados. Repetible.",
+    )
+    return parser.parse_args()
+
+
 def _clean_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         key: value.strip() if isinstance(value, str) else value
@@ -89,54 +111,54 @@ def load_briefs() -> List[Dict[str, Any]]:
         _validate_headers(reader.fieldnames)
 
         for row in reader:
-            clean_row = _clean_row(row)
-            briefs.append(clean_row)
+            briefs.append(_clean_row(row))
 
     return briefs
 
 
-def load_pending_briefs() -> List[Dict[str, Any]]:
-    return [brief for brief in load_briefs() if brief.get("estado", "").lower() == "pending"]
-
-
-def _load_or_generate_script(brief: Dict[str, Any], paths: Dict[str, Any]) -> Dict[str, Any]:
-    if paths["script"].exists() and not OVERWRITE_SCRIPT:
-        update_status(paths["status"], script_generated=True, last_step="script_reused")
-        existing_script = safe_read_json(paths["script"], default={}) or {}
+def _load_or_generate_script(brief: Dict[str, Any], paths) -> Dict[str, Any]:
+    script_input = first_existing_path(paths.script, paths.legacy_script_candidates)
+    if script_input.exists() and not OVERWRITE_SCRIPT:
+        update_status(paths.status, script_generated=True, last_step="script_reused")
+        existing_script = safe_read_json(script_input, default={}) or {}
         if not existing_script:
-            raise ValueError(f"script.json vacio o invalido para job {paths['job_dir'].name}")
+            raise ValueError(f"script.json vacio o invalido para job {paths.job_id}")
         validate_script_data(existing_script)
+        if script_input != paths.script:
+            safe_write_json(paths.script, existing_script)
         return existing_script
 
     script = generate_script(brief)
-    safe_write_json(paths["script"], script)
-    update_status(paths["status"], script_generated=True, last_step="script_generated")
+    safe_write_json(paths.script, script)
+    update_status(paths.status, script_generated=True, last_step="script_generated")
     return script
 
 
 def _load_or_generate_manifest(
     brief: Dict[str, Any],
     script: Dict[str, Any],
-    paths: Dict[str, Any],
-    job_id: str,
+    paths,
 ) -> Dict[str, Any]:
-    if paths["manifest"].exists() and not OVERWRITE_MANIFEST:
-        update_status(paths["status"], visual_manifest_generated=True, last_step="manifest_reused")
-        existing_manifest = safe_read_json(paths["manifest"], default={}) or {}
+    manifest_input = first_existing_path(paths.manifest, paths.legacy_manifest_candidates)
+    if manifest_input.exists() and not OVERWRITE_MANIFEST:
+        update_status(paths.status, visual_manifest_generated=True, last_step="manifest_reused")
+        existing_manifest = safe_read_json(manifest_input, default={}) or {}
         if not existing_manifest:
-            raise ValueError(f"visual_manifest.json vacio o invalido para job {job_id}")
+            raise ValueError(f"visual_manifest.json vacio o invalido para job {paths.job_id}")
+        if manifest_input != paths.manifest:
+            safe_write_json(paths.manifest, existing_manifest)
         return existing_manifest
 
     manifest = build_visual_manifest(
         brief=brief,
         script=script,
-        job_id=job_id,
-        audio_path=paths["audio"],
-        subtitles_path=paths["subtitles"],
+        job_id=paths.job_id,
+        audio_path=paths.audio,
+        subtitles_path=paths.subtitles,
     )
-    safe_write_json(paths["manifest"], manifest)
+    safe_write_json(paths.manifest, manifest)
     update_status(
-        paths["status"],
+        paths.status,
         visual_manifest_generated=True,
         last_step="visual_manifest_generated",
     )
@@ -147,12 +169,12 @@ def process_brief(brief: Dict[str, Any]) -> Dict[str, Any]:
     job_id = pad_job_id(brief.get("id"))
     paths = get_job_paths(job_id)
 
-    # The CSV remains the editorial source of truth, so brief.json is refreshed from it.
-    safe_write_json(paths["brief"], brief)
-    update_status(paths["status"], brief_created=True, last_step="brief_synced_from_csv")
+    ensure_job_metadata(paths, brief)
+    safe_write_json(paths.brief, brief)
+    update_status(paths.status, brief_created=True, last_step="brief_synced_from_csv")
 
     script = _load_or_generate_script(brief, paths)
-    _load_or_generate_manifest(brief, script, paths, job_id)
+    _load_or_generate_manifest(brief, script, paths)
 
     status = sync_status_with_files(paths)
     return build_index_row(brief, status, job_id)
@@ -162,12 +184,13 @@ def build_error_index_row(brief: Dict[str, Any], message: str) -> Dict[str, Any]
     job_id = pad_job_id(brief.get("id"))
     paths = get_job_paths(job_id)
 
-    safe_write_json(paths["brief"], brief)
+    ensure_job_metadata(paths, brief)
+    safe_write_json(paths.brief, brief)
     status = update_status(
-        paths["status"],
+        paths.status,
         brief_created=True,
-        script_generated=paths["script"].exists(),
-        visual_manifest_generated=paths["manifest"].exists(),
+        script_generated=first_existing_path(paths.script, paths.legacy_script_candidates).exists(),
+        visual_manifest_generated=first_existing_path(paths.manifest, paths.legacy_manifest_candidates).exists(),
         last_step=f"error: {message}",
     )
     return build_index_row(brief, status, job_id)
@@ -178,25 +201,21 @@ def build_derived_index(all_briefs: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
     for brief in all_briefs:
         job_id = pad_job_id(brief.get("id"))
-        paths = {
-            "job_dir": JOBS_DIR / job_id,
-            "brief": JOBS_DIR / job_id / "brief.json",
-            "script": JOBS_DIR / job_id / "script.json",
-            "status": JOBS_DIR / job_id / "status.json",
-            "manifest": JOBS_DIR / job_id / "visual_manifest.json",
-            "audio": JOBS_DIR / job_id / "audio" / "narration.wav",
-            "subtitles": JOBS_DIR / job_id / "subtitles" / "narration.srt",
-        }
+        paths = get_job_paths(job_id)
         has_job_material = any(
             path.exists()
-            for key, path in paths.items()
-            if key != "job_dir"
+            for path in [
+                first_existing_path(paths.brief, paths.legacy_brief_candidates),
+                first_existing_path(paths.script, paths.legacy_script_candidates),
+                first_existing_path(paths.manifest, paths.legacy_manifest_candidates),
+                first_existing_path(paths.audio, paths.legacy_audio_candidates),
+                first_existing_path(paths.subtitles, paths.legacy_subtitles_candidates),
+            ]
         )
 
         if not has_job_material and brief.get("estado", "").lower() != "pending":
             continue
-
-        if brief.get("estado", "").lower() == "pending" and not paths["brief"].exists():
+        if brief.get("estado", "").lower() == "pending" and not first_existing_path(paths.brief, paths.legacy_brief_candidates).exists():
             continue
 
         status = sync_status_with_files(paths)
@@ -206,9 +225,19 @@ def build_derived_index(all_briefs: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
 
 def main() -> None:
+    args = parse_args()
+    configure_runtime(dataset_root=args.dataset_root, jobs_root=args.jobs_root)
+    runtime = get_runtime_paths()
+
+    print(f"Dataset root: {runtime.dataset_root}")
+    print(f"Jobs root: {runtime.jobs_root}")
     print("Cargando briefs pendientes...")
+
     all_briefs = load_briefs()
+    selected_job_ids = {pad_job_id(job_id) for job_id in args.job_ids or []}
     briefs = [brief for brief in all_briefs if brief.get("estado", "").lower() == "pending"]
+    if selected_job_ids:
+        briefs = [brief for brief in briefs if pad_job_id(brief.get("id")) in selected_job_ids]
 
     if not briefs:
         print("No hay briefs pendientes. Reconstruyendo solo data/index.csv como indice derivado.")

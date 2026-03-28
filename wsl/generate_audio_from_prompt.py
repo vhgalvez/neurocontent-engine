@@ -1,11 +1,9 @@
-# generate_audio_from_prompt.py
 import argparse
 import json
 import os
 import random
 import sys
 import traceback
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -13,19 +11,17 @@ import soundfile as sf
 import torch
 from qwen_tts import Qwen3TTSModel, VoiceClonePromptItem
 
-os.environ["ORT_LOGGING_LEVEL"] = "3"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-JOBS_DIR = PROJECT_DIR / "jobs"
+sys.path.insert(0, str(PROJECT_DIR))
+
+from config import configure_runtime, get_runtime_paths  # noqa: E402
+from director import update_status  # noqa: E402
+from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
+from voice_registry import assign_voice_to_job, get_voice, register_voice, resolve_job_voice_assignment, safe_read_json  # noqa: E402
+
 DEFAULT_BASE_MODEL_PATH = os.getenv(
     "QWEN_TTS_BASE_MODEL_PATH",
     "/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-Base",
-)
-DEFAULT_REFERENCE_ROOT = os.getenv(
-    "QWEN_TTS_REFERENCE_ROOT",
-    str(PROJECT_DIR / "assets" / "voices"),
 )
 DEFAULT_LANGUAGE = os.getenv("QWEN_TTS_LANGUAGE", "Spanish")
 DEFAULT_REFERENCE_LANGUAGE = os.getenv("QWEN_TTS_REFERENCE_LANGUAGE", DEFAULT_LANGUAGE)
@@ -33,7 +29,6 @@ DEFAULT_DEVICE = os.getenv("QWEN_TTS_DEVICE", "auto").lower()
 DEFAULT_OVERWRITE = os.getenv("QWEN_TTS_OVERWRITE", "false").lower() == "true"
 DEFAULT_USE_FLASH_ATTN = os.getenv("QWEN_TTS_USE_FLASH_ATTN", "false").lower() == "true"
 DEFAULT_X_VECTOR_ONLY = os.getenv("QWEN_TTS_X_VECTOR_ONLY_MODE", "false").lower() == "true"
-DEFAULT_VOICE_NAME = os.getenv("QWEN_TTS_REFERENCE_NAME", "voz_principal")
 DEFAULT_SEED = int(os.getenv("QWEN_TTS_SEED", "424242"))
 
 
@@ -41,19 +36,8 @@ def log(message: str) -> None:
     print(message, flush=True)
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
 def normalize_text(value: str) -> str:
     return " ".join(str(value or "").split()).strip()
-
-
-def safe_read_json(path: Path, default=None):
-    if not path.exists():
-        return default
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
 
 
 def safe_write_json(path: Path, data) -> None:
@@ -62,74 +46,15 @@ def safe_write_json(path: Path, data) -> None:
         json.dump(data, handle, ensure_ascii=False, indent=2)
 
 
-def safe_read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8").strip()
-
-
-def safe_read_voice_metadata(path: Path) -> dict:
-    return safe_read_json(path, default={}) or {}
-
-
-def load_job_status(status_path: Path) -> dict:
-    current = safe_read_json(status_path, default={}) or {}
-    defaults = {
-        "brief_created": False,
-        "script_generated": False,
-        "audio_generated": False,
-        "subtitles_generated": False,
-        "visual_manifest_generated": False,
-        "export_ready": False,
-        "last_step": "created",
-        "updated_at": "",
-        "voice_model_path": "",
-        "voice_flow": "",
-        "voice_reference_path": "",
-        "voice_clone_prompt_path": "",
-    }
-    defaults.update(current)
-    defaults["export_ready"] = bool(
-        defaults["brief_created"]
-        and defaults["script_generated"]
-        and defaults["audio_generated"]
-        and defaults["subtitles_generated"]
-        and defaults["visual_manifest_generated"]
-    )
-    return defaults
-
-
-def update_status(status_path: Path, **changes) -> dict:
-    status = load_job_status(status_path)
-    status.update(changes)
-    status["updated_at"] = now_iso()
-    status["export_ready"] = bool(
-        status["brief_created"]
-        and status["script_generated"]
-        and status["audio_generated"]
-        and status["subtitles_generated"]
-        and status["visual_manifest_generated"]
-    )
-    safe_write_json(status_path, status)
-    return status
-
-
 def resolve_model_path(base_path: str) -> str:
     base = Path(base_path)
-    if not base.exists():
-        raise RuntimeError(f"No existe la ruta base del modelo: {base}")
     if (base / "config.json").exists():
         return str(base)
-    snapshots_dir = base / "snapshots"
-    if not snapshots_dir.exists():
-        raise RuntimeError(f"No existe snapshots en: {base}")
-    snapshots = sorted(
-        (path for path in snapshots_dir.iterdir() if path.is_dir()),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
+    snapshots = sorted((base / "snapshots").iterdir(), key=lambda path: path.stat().st_mtime, reverse=True)
     for snapshot in snapshots:
         if (snapshot / "config.json").exists():
             return str(snapshot)
-    raise RuntimeError(f"No se encontro snapshot valido con config.json en {snapshots_dir}")
+    raise RuntimeError(f"No se encontro snapshot valido con config.json en {base}")
 
 
 def get_device_and_dtype(device_mode: str) -> tuple[str, torch.dtype]:
@@ -139,9 +64,7 @@ def get_device_and_dtype(device_mode: str) -> tuple[str, torch.dtype]:
         if not torch.cuda.is_available():
             raise RuntimeError("QWEN_TTS_DEVICE=cuda pero CUDA no esta disponible")
         return "cuda:0", torch.bfloat16
-    if torch.cuda.is_available():
-        return "cuda:0", torch.bfloat16
-    return "cpu", torch.float32
+    return ("cuda:0", torch.bfloat16) if torch.cuda.is_available() else ("cpu", torch.float32)
 
 
 def set_global_seed(seed: int) -> None:
@@ -164,57 +87,32 @@ def load_model(model_path: str, device_mode: str, use_flash_attn: bool):
     }
     if use_flash_attn and str(device_map).startswith("cuda"):
         kwargs["attn_implementation"] = "flash_attention_2"
-
-    log(f"[clone] Modelo Base: {resolved_model_path}")
-    log(f"[clone] device_map={device_map} dtype={dtype} flash_attn={use_flash_attn}")
     model = Qwen3TTSModel.from_pretrained(resolved_model_path, **kwargs)
     if getattr(model.model, "tts_model_type", None) != "base":
-        raise RuntimeError(
-            "El modelo cargado no es Base. "
-            f"tts_model_type={getattr(model.model, 'tts_model_type', 'desconocido')}"
-        )
+        raise RuntimeError("El modelo cargado no es Base.")
     return model, resolved_model_path
 
 
-def resolve_callable(model, names: list[str], label: str) -> callable:
-    for name in names:
-        candidate = getattr(model, name, None)
-        if callable(candidate):
-            log(f"[clone] Metodo {label}: {name}")
-            return candidate
-    raise RuntimeError(f"No se encontro un metodo compatible para {label}: {', '.join(names)}")
-
-
-def voice_dir_for_name(reference_root: Path, voice_name: str) -> Path:
-    return reference_root / voice_name
-
-
 def serialize_prompt_items(items: list[VoiceClonePromptItem]) -> list[dict]:
-    serialized = []
-    for item in items:
-        serialized.append(
-            {
-                "ref_code": item.ref_code.detach().cpu().tolist() if item.ref_code is not None else None,
-                "ref_spk_embedding": item.ref_spk_embedding.detach().cpu().tolist(),
-                "x_vector_only_mode": bool(item.x_vector_only_mode),
-                "icl_mode": bool(item.icl_mode),
-                "ref_text": item.ref_text,
-            }
-        )
-    return serialized
+    return [
+        {
+            "ref_code": item.ref_code.detach().cpu().tolist() if item.ref_code is not None else None,
+            "ref_spk_embedding": item.ref_spk_embedding.detach().cpu().tolist(),
+            "x_vector_only_mode": bool(item.x_vector_only_mode),
+            "icl_mode": bool(item.icl_mode),
+            "ref_text": item.ref_text,
+        }
+        for item in items
+    ]
 
 
 def deserialize_prompt_items(data: list[dict]) -> list[VoiceClonePromptItem]:
     items: list[VoiceClonePromptItem] = []
     for row in data:
-        ref_code = row.get("ref_code")
-        ref_spk_embedding = row.get("ref_spk_embedding")
-        if ref_spk_embedding is None:
-            raise RuntimeError("voice_clone_prompt serializado invalido: falta ref_spk_embedding")
         items.append(
             VoiceClonePromptItem(
-                ref_code=torch.tensor(ref_code, dtype=torch.long) if ref_code is not None else None,
-                ref_spk_embedding=torch.tensor(ref_spk_embedding, dtype=torch.float32),
+                ref_code=torch.tensor(row["ref_code"], dtype=torch.long) if row.get("ref_code") is not None else None,
+                ref_spk_embedding=torch.tensor(row["ref_spk_embedding"], dtype=torch.float32),
                 x_vector_only_mode=bool(row.get("x_vector_only_mode", False)),
                 icl_mode=bool(row.get("icl_mode", False)),
                 ref_text=row.get("ref_text"),
@@ -224,219 +122,147 @@ def deserialize_prompt_items(data: list[dict]) -> list[VoiceClonePromptItem]:
 
 
 def save_prompt_json(path: Path, prompt_items: list[VoiceClonePromptItem], metadata: dict) -> None:
-    safe_write_json(
-        path,
-        {
-            "format": "qwen3_voice_clone_prompt_items",
-            "items": serialize_prompt_items(prompt_items),
-            "metadata": metadata,
-        },
-    )
+    safe_write_json(path, {"format": "qwen3_voice_clone_prompt_items", "items": serialize_prompt_items(prompt_items), "metadata": metadata})
 
 
 def load_prompt_json(path: Path) -> list[VoiceClonePromptItem]:
     payload = safe_read_json(path, default=None)
-    if not payload:
-        raise RuntimeError(f"No se pudo leer voice_clone_prompt desde {path}")
-    if payload.get("format") != "qwen3_voice_clone_prompt_items":
+    if not payload or payload.get("format") != "qwen3_voice_clone_prompt_items":
         raise RuntimeError(f"Formato de prompt no soportado en {path}")
     return deserialize_prompt_items(payload.get("items", []))
 
 
-def read_job_text(job_id: str) -> str:
-    script_path = JOBS_DIR / job_id / "script.json"
+def read_job_text(job_paths) -> str:
+    script_path = job_paths.script if job_paths.script.exists() else job_paths.legacy_script_candidates[0]
     script_data = safe_read_json(script_path, default={}) or {}
     return normalize_text(script_data.get("guion_narrado", ""))
 
 
-def read_job_voice_config(job_id: str) -> dict:
-    return safe_read_json(JOBS_DIR / job_id / "voice.json", default={}) or {}
-
-
-def resolve_job_reference_config(job_id: str, args: argparse.Namespace) -> dict:
-    job_config = read_job_voice_config(job_id)
-    voice_name = normalize_text(job_config.get("voice_name", args.voice_name or DEFAULT_VOICE_NAME)).replace(" ", "_")
-    reference_root = Path(args.reference_root)
-    voice_dir = reference_root / voice_name if voice_name else None
-    voice_metadata = safe_read_voice_metadata(voice_dir / "voice.json") if voice_dir and (voice_dir / "voice.json").exists() else {}
-
-    reference_wav = job_config.get("reference_wav") or voice_metadata.get("reference_wav")
-    if not reference_wav and voice_dir:
-        reference_wav = str(voice_dir / "reference.wav")
-
-    reference_text = job_config.get("reference_text") or voice_metadata.get("reference_text")
-    if not reference_text and voice_dir and (voice_dir / "reference.txt").exists():
-        reference_text = safe_read_text(voice_dir / "reference.txt")
-
-    prompt_json = job_config.get("voice_clone_prompt_path") or voice_metadata.get("voice_clone_prompt_path")
-    if not prompt_json and voice_dir and (voice_dir / "voice_clone_prompt.json").exists():
-        prompt_json = str(voice_dir / "voice_clone_prompt.json")
-
-    return {
-        "voice_name": voice_name,
-        "reference_wav": reference_wav,
-        "reference_text": reference_text,
-        "voice_clone_prompt_path": prompt_json,
-        "x_vector_only_mode": bool(job_config.get("x_vector_only_mode", voice_metadata.get("x_vector_only_mode", args.x_vector_only_mode))),
-        "reference_language": job_config.get("reference_language", voice_metadata.get("language", args.reference_language)),
-    }
-
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Genera audio consistente con Qwen3-TTS Base usando voice clone prompt."
-    )
-    parser.add_argument("--job-id", help="Job a procesar leyendo jobs/<job_id>/script.json.")
+    parser = argparse.ArgumentParser(description="Genera audio consistente con Qwen3-TTS Base.")
+    parser.add_argument("--dataset-root", help="Override para VIDEO_DATASET_ROOT.")
+    parser.add_argument("--jobs-root", help="Override para VIDEO_JOBS_ROOT.")
+    parser.add_argument("--job-id", help="Job a procesar.")
+    parser.add_argument("--voice-id", help="Selecciona una voz ya registrada.")
     parser.add_argument("--text", help="Texto directo para sintetizar sin usar job.")
-    parser.add_argument("--output", help="Ruta de salida para --text. Para jobs se usa jobs/<id>/audio/narration.wav.")
-    parser.add_argument("--voice-name", default=DEFAULT_VOICE_NAME, help="Nombre de voz bajo assets/voices.")
-    parser.add_argument("--reference-root", default=DEFAULT_REFERENCE_ROOT, help="Raiz de assets/voices.")
+    parser.add_argument("--output", help="Ruta de salida para --text.")
     parser.add_argument("--reference-wav", help="Ruta explicita al wav de referencia.")
     parser.add_argument("--reference-text", help="Texto exacto del wav de referencia.")
     parser.add_argument("--voice-clone-prompt", help="JSON previamente serializado.")
-    parser.add_argument("--save-prompt", action="store_true", help="Guarda el prompt serializado si se crea.")
+    parser.add_argument("--save-prompt", action="store_true", help="Guarda el prompt serializado.")
     parser.add_argument("--prompt-output", help="Ruta explicita para guardar el prompt serializado.")
-    parser.add_argument("--x-vector-only-mode", action="store_true", default=DEFAULT_X_VECTOR_ONLY, help="Clona solo por speaker embedding.")
-    parser.add_argument("--language", default=DEFAULT_LANGUAGE, help="Idioma del texto final.")
-    parser.add_argument("--reference-language", default=DEFAULT_REFERENCE_LANGUAGE, help="Idioma del audio de referencia.")
-    parser.add_argument("--model-path", default=DEFAULT_BASE_MODEL_PATH, help="Ruta del modelo Base.")
-    parser.add_argument("--device", default=DEFAULT_DEVICE, choices=["auto", "cpu", "cuda"], help="Device.")
-    parser.add_argument("--overwrite", action="store_true", default=DEFAULT_OVERWRITE, help="Sobrescribe narration.wav.")
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Seed global.")
-    parser.add_argument(
-        "--use-flash-attn",
-        action="store_true",
-        default=DEFAULT_USE_FLASH_ATTN,
-        help="Usa flash_attention_2 si esta disponible.",
-    )
+    parser.add_argument("--voice-name", default="voz_principal")
+    parser.add_argument("--scope", choices=["global", "job"], default="global")
+    parser.add_argument("--x-vector-only-mode", action="store_true", default=DEFAULT_X_VECTOR_ONLY)
+    parser.add_argument("--language", default=DEFAULT_LANGUAGE)
+    parser.add_argument("--reference-language", default=DEFAULT_REFERENCE_LANGUAGE)
+    parser.add_argument("--model-path", default=DEFAULT_BASE_MODEL_PATH)
+    parser.add_argument("--device", default=DEFAULT_DEVICE, choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--overwrite", action="store_true", default=DEFAULT_OVERWRITE)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--use-flash-attn", action="store_true", default=DEFAULT_USE_FLASH_ATTN)
     return parser.parse_args()
 
 
-def build_or_load_prompt(
-    model,
-    create_prompt_method,
-    reference_root: Path,
-    voice_name: str,
-    reference_wav: Path,
-    reference_text: str | None,
-    x_vector_only_mode: bool,
-    prompt_input_path: Path | None,
-    prompt_output_path: Path | None,
-    save_prompt: bool,
-) -> tuple[list[VoiceClonePromptItem], str | None]:
-    if prompt_input_path:
-        log(f"[clone] Cargando voice_clone_prompt desde {prompt_input_path}")
-        return load_prompt_json(prompt_input_path), str(prompt_input_path)
+def build_or_load_prompt(model, reference_wav: Path, reference_text: str | None, x_vector_only_mode: bool, prompt_input: Path | None, prompt_output: Path | None, save_prompt: bool):
+    if prompt_input:
+        return load_prompt_json(prompt_input), str(prompt_input)
 
+    create_prompt = getattr(model, "create_voice_clone_prompt", None)
+    if not callable(create_prompt):
+        raise RuntimeError("La libreria qwen_tts no expone create_voice_clone_prompt()")
     if not reference_wav.exists():
         raise RuntimeError(f"No existe reference.wav: {reference_wav}")
-
     if not x_vector_only_mode and not normalize_text(reference_text or ""):
         raise RuntimeError("reference_text es obligatorio cuando x_vector_only_mode=false")
 
-    prompt_items = create_prompt_method(
-        ref_audio=str(reference_wav),
-        ref_text=reference_text,
-        x_vector_only_mode=x_vector_only_mode,
-    )
-    if not prompt_items:
-        raise RuntimeError("create_voice_clone_prompt() no devolvio items")
-
+    prompt_items = create_prompt(ref_audio=str(reference_wav), ref_text=reference_text, x_vector_only_mode=x_vector_only_mode)
     saved_path = None
     if save_prompt:
-        if prompt_output_path is None:
-            prompt_output_path = voice_dir_for_name(reference_root, voice_name) / "voice_clone_prompt.json"
-        save_prompt_json(
-            prompt_output_path,
-            prompt_items,
-            metadata={
-                "voice_name": voice_name,
-                "reference_wav": str(reference_wav),
-                "reference_text": reference_text,
-                "x_vector_only_mode": x_vector_only_mode,
-                "saved_at": now_iso(),
-            },
-        )
-        saved_path = str(prompt_output_path)
-        log(f"[clone] voice_clone_prompt guardado en {prompt_output_path}")
-
+        if prompt_output is None:
+            prompt_output = reference_wav.parent / "voice_clone_prompt.json"
+        save_prompt_json(prompt_output, prompt_items, {"reference_wav": str(reference_wav), "reference_text": reference_text})
+        saved_path = str(prompt_output)
     return prompt_items, saved_path
+
+
+def resolve_voice(job_paths, args: argparse.Namespace, resolved_model_path: str):
+    runtime = get_runtime_paths()
+    if args.job_id:
+        assigned = resolve_job_voice_assignment(runtime, job_paths, explicit_voice_id=args.voice_id)
+        record = assigned["record"] if assigned else None
+        if record:
+            return record, assigned["selection_mode"]
+
+    if args.reference_wav:
+        record = register_voice(
+            runtime,
+            scope=args.scope if not args.job_id else "job",
+            job_id=job_paths.job_id if args.job_id else None,
+            voice_name=normalize_text(args.voice_name).replace(" ", "_"),
+            voice_description="Voice clone manual.",
+            model_name=resolved_model_path,
+            language=args.reference_language,
+            seed=args.seed,
+            voice_instruct="",
+            reference_file=str(Path(args.reference_wav)),
+            engine="voice_clone",
+            voice_id=args.voice_id,
+            notes="Registrada desde generate_audio_from_prompt.",
+        )
+        if args.job_id:
+            assign_voice_to_job(job_paths, record, selection_mode="manual")
+        return record, "manual"
+
+    raise RuntimeError("No hay una voz resoluble. Usa --voice-id o --reference-wav.")
 
 
 def main() -> None:
     args = parse_args()
+    configure_runtime(dataset_root=args.dataset_root, jobs_root=args.jobs_root)
 
     try:
         if not args.job_id and not args.text:
             raise RuntimeError("Debes indicar --job-id o --text")
 
         set_global_seed(args.seed)
-        model, resolved_model_path = load_model(
-            model_path=args.model_path,
-            device_mode=args.device,
-            use_flash_attn=args.use_flash_attn,
-        )
-        create_prompt_method = resolve_callable(
-            model,
-            ["create_voice_clone_prompt"],
-            "create_voice_clone_prompt",
-        )
-        generate_clone_method = resolve_callable(
-            model,
-            ["generate_voice_clone"],
-            "generate_voice_clone",
-        )
+        model, resolved_model_path = load_model(args.model_path, args.device, args.use_flash_attn)
+        generate_clone = getattr(model, "generate_voice_clone", None)
+        if not callable(generate_clone):
+            raise RuntimeError("La libreria qwen_tts no expone generate_voice_clone()")
 
         if args.job_id:
-            text = read_job_text(args.job_id)
+            job_paths = ensure_job_structure(build_job_paths(args.job_id, get_runtime_paths()))
+            text = read_job_text(job_paths)
             if not text:
-                raise RuntimeError(f"jobs/{args.job_id}/script.json no contiene guion_narrado")
-            job_voice = resolve_job_reference_config(args.job_id, args)
-            voice_name = job_voice["voice_name"]
-            reference_wav = Path(args.reference_wav or job_voice["reference_wav"])
-            reference_text = args.reference_text or job_voice["reference_text"]
-            prompt_input = Path(args.voice_clone_prompt or job_voice["voice_clone_prompt_path"]) if (args.voice_clone_prompt or job_voice["voice_clone_prompt_path"]) else None
-            x_vector_only_mode = bool(job_voice["x_vector_only_mode"])
-            output_path = JOBS_DIR / args.job_id / "audio" / "narration.wav"
+                raise RuntimeError(f"{job_paths.script} no contiene guion_narrado")
+            output_path = job_paths.audio
             if output_path.exists() and not args.overwrite:
                 raise RuntimeError(f"Ya existe {output_path}. Usa --overwrite para regenerarlo.")
-            prompt_output_path = Path(args.prompt_output) if args.prompt_output else None
         else:
+            job_paths = None
             text = normalize_text(args.text)
-            if not text:
-                raise RuntimeError("El texto no puede estar vacio")
-            voice_name = normalize_text(args.voice_name).replace(" ", "_")
-            reference_wav = Path(args.reference_wav or (Path(args.reference_root) / voice_name / "reference.wav"))
-            if args.reference_text:
-                reference_text = args.reference_text
-            else:
-                voice_dir = Path(args.reference_root) / voice_name
-                voice_metadata = safe_read_voice_metadata(voice_dir / "voice.json") if (voice_dir / "voice.json").exists() else {}
-                default_reference_text_path = voice_dir / "reference.txt"
-                reference_text = (
-                    voice_metadata.get("reference_text")
-                    or (safe_read_text(default_reference_text_path) if default_reference_text_path.exists() else None)
-                )
-            prompt_input = Path(args.voice_clone_prompt) if args.voice_clone_prompt else None
-            x_vector_only_mode = args.x_vector_only_mode
             output_path = Path(args.output) if args.output else PROJECT_DIR / "outputs" / "voice_clone_preview.wav"
-            prompt_output_path = Path(args.prompt_output) if args.prompt_output else None
+
+        record, selection_mode = resolve_voice(job_paths, args, resolved_model_path)
+        reference_wav = Path(args.reference_wav or record.get("reference_file") or "")
+        reference_text = args.reference_text
+        prompt_input = Path(args.voice_clone_prompt) if args.voice_clone_prompt else (
+            Path(record["voice_clone_prompt_path"]) if record.get("voice_clone_prompt_path") else None
+        )
+        prompt_output = Path(args.prompt_output) if args.prompt_output else None
 
         prompt_items, saved_prompt_path = build_or_load_prompt(
             model=model,
-            create_prompt_method=create_prompt_method,
-            reference_root=Path(args.reference_root),
-            voice_name=voice_name,
             reference_wav=reference_wav,
             reference_text=reference_text,
-            x_vector_only_mode=x_vector_only_mode,
-            prompt_input_path=prompt_input,
-            prompt_output_path=prompt_output_path,
+            x_vector_only_mode=args.x_vector_only_mode,
+            prompt_input=prompt_input,
+            prompt_output=prompt_output,
             save_prompt=args.save_prompt,
         )
 
-        log(f"[clone] Generando audio final para voice_name={voice_name}")
-        wavs, sample_rate = generate_clone_method(
+        wavs, sample_rate = generate_clone(
             text=text,
             language=args.language,
             voice_clone_prompt=prompt_items,
@@ -449,24 +275,41 @@ def main() -> None:
         sf.write(str(output_path), wavs[0], sample_rate)
         log(f"[clone] Audio final guardado en {output_path}")
 
-        if args.job_id:
-            update_status(
-                JOBS_DIR / args.job_id / "status.json",
-                audio_generated=True,
-                last_step="audio_generated_voice_clone",
-                voice_flow="voice_clone",
-                voice_model_path=resolved_model_path,
-                voice_reference_path=str(reference_wav),
-                voice_clone_prompt_path=saved_prompt_path or (str(prompt_input) if prompt_input else ""),
+        if record:
+            updated_record = register_voice(
+                get_runtime_paths(),
+                scope=record["scope"],
+                job_id=record.get("job_id"),
+                voice_name=record["voice_name"],
+                voice_description=record["voice_description"],
+                model_name=record["model_name"],
+                language=record["language"],
+                seed=record.get("seed"),
+                voice_instruct=record.get("voice_instruct", ""),
+                reference_file=str(reference_wav),
+                voice_clone_prompt_path=saved_prompt_path or record.get("voice_clone_prompt_path"),
+                engine="voice_clone",
+                voice_id=record["voice_id"],
+                notes=record.get("notes", ""),
             )
+            if job_paths:
+                assign_voice_to_job(job_paths, updated_record, selection_mode=selection_mode)
+                update_status(
+                    job_paths.status,
+                    audio_generated=True,
+                    last_step="audio_generated_voice_clone",
+                    voice_id=updated_record["voice_id"],
+                    voice_scope=updated_record["scope"],
+                    voice_name=updated_record["voice_name"],
+                    voice_selection_mode=selection_mode,
+                    voice_model_name=updated_record["model_name"],
+                    voice_reference_file=updated_record.get("reference_file", "") or "",
+                )
 
     except Exception as exc:
         if args.job_id:
-            update_status(
-                JOBS_DIR / args.job_id / "status.json",
-                audio_generated=False,
-                last_step="audio_error_voice_clone",
-            )
+            job_paths = ensure_job_structure(build_job_paths(args.job_id, get_runtime_paths()))
+            update_status(job_paths.status, audio_generated=False, last_step="audio_error_voice_clone")
         log(f"[clone] Error: {exc}")
         traceback.print_exc()
         sys.exit(1)

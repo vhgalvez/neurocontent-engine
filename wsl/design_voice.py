@@ -1,26 +1,8 @@
-"""Ejemplos de uso:
-
-bash wsl/run_design_voice.sh \
-  --voice-name voz_finanzas \
-  --description "Voz femenina madura, sobria y profesional." \
-  --reference-text "Hola, esta es una referencia corta." \
-  --overwrite
-
-python wsl/design_voice.py \
-  --voice-name voz_finanzas \
-  --description "Voz femenina madura, sobria y profesional." \
-  --reference-text "Hola, esta es una referencia corta." \
-  --device cuda \
-  --overwrite
-"""
-
 import argparse
-import json
 import os
 import random
 import sys
 import traceback
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -28,20 +10,21 @@ import soundfile as sf
 import torch
 from qwen_tts import Qwen3TTSModel
 
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_DIR))
+
+from config import configure_runtime, get_runtime_paths  # noqa: E402
+from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
+from voice_registry import assign_voice_to_job, register_voice  # noqa: E402
+
 os.environ["ORT_LOGGING_LEVEL"] = "3"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-PROJECT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_PATH = os.getenv(
     "QWEN_TTS_MODEL_PATH",
     "/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign",
 )
-DEFAULT_REFERENCE_ROOT = os.getenv(
-    "QWEN_TTS_REFERENCE_ROOT",
-    str(PROJECT_DIR / "assets" / "voices"),
-)
-DEFAULT_VOICE_NAME = os.getenv("QWEN_TTS_REFERENCE_NAME", "voz_principal")
 DEFAULT_DESCRIPTION = os.getenv(
     "QWEN_TTS_VOICE_DESCRIPTION",
     "Voz femenina madura, seria, clara y profesional para narracion tipo podcast.",
@@ -60,43 +43,19 @@ def log(message: str) -> None:
     print(message, flush=True)
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
 def normalize_text(value: str) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
-def safe_write_json(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2)
-
-
-def safe_write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-
-
 def resolve_model_path(base_path: str) -> str:
     base = Path(base_path)
-    if not base.exists():
-        raise RuntimeError(f"No existe la ruta base del modelo: {base}")
     if (base / "config.json").exists():
         return str(base)
-    snapshots_dir = base / "snapshots"
-    if not snapshots_dir.exists():
-        raise RuntimeError(f"No existe snapshots en: {base}")
-    snapshots = sorted(
-        (path for path in snapshots_dir.iterdir() if path.is_dir()),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
+    snapshots = sorted((base / "snapshots").iterdir(), key=lambda path: path.stat().st_mtime, reverse=True)
     for snapshot in snapshots:
         if (snapshot / "config.json").exists():
             return str(snapshot)
-    raise RuntimeError(f"No se encontro snapshot valido con config.json en {snapshots_dir}")
+    raise RuntimeError(f"No se encontro snapshot valido con config.json en {base}")
 
 
 def get_device_and_dtype(device_mode: str) -> tuple[str, torch.dtype]:
@@ -106,9 +65,7 @@ def get_device_and_dtype(device_mode: str) -> tuple[str, torch.dtype]:
         if not torch.cuda.is_available():
             raise RuntimeError("QWEN_TTS_DEVICE=cuda pero CUDA no esta disponible")
         return "cuda:0", torch.bfloat16
-    if torch.cuda.is_available():
-        return "cuda:0", torch.bfloat16
-    return "cpu", torch.float32
+    return ("cuda:0", torch.bfloat16) if torch.cuda.is_available() else ("cpu", torch.float32)
 
 
 def set_global_seed(seed: int) -> None:
@@ -131,81 +88,49 @@ def load_model(model_path: str, device_mode: str, use_flash_attn: bool):
     }
     if use_flash_attn and str(device_map).startswith("cuda"):
         kwargs["attn_implementation"] = "flash_attention_2"
-
-    log(f"[design_voice] Modelo VoiceDesign: {resolved_model_path}")
-    log(f"[design_voice] device_map={device_map} dtype={dtype} flash_attn={use_flash_attn}")
     model = Qwen3TTSModel.from_pretrained(resolved_model_path, **kwargs)
     if getattr(model.model, "tts_model_type", None) != "voice_design":
-        raise RuntimeError(
-            "El modelo cargado no es VoiceDesign. "
-            f"tts_model_type={getattr(model.model, 'tts_model_type', 'desconocido')}"
-        )
+        raise RuntimeError("El modelo cargado no es VoiceDesign.")
     return model, resolved_model_path
 
 
-def resolve_generate_voice_design_method(model) -> callable:
-    method = getattr(model, "generate_voice_design", None)
-    if not callable(method):
-        raise RuntimeError("La libreria qwen_tts no expone generate_voice_design()")
-    return method
-
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Disena una voz con Qwen3-TTS VoiceDesign y genera reference.wav."
-    )
-    parser.add_argument("--voice-name", default=DEFAULT_VOICE_NAME, help="Nombre de carpeta bajo assets/voices.")
+    parser = argparse.ArgumentParser(description="Diseña y registra una voz con Qwen3-TTS VoiceDesign.")
+    parser.add_argument("--dataset-root", help="Override para VIDEO_DATASET_ROOT.")
+    parser.add_argument("--jobs-root", help="Override para VIDEO_JOBS_ROOT.")
+    parser.add_argument("--scope", choices=["global", "job"], default="global")
+    parser.add_argument("--job-id", help="Obligatorio cuando scope=job.")
+    parser.add_argument("--voice-id", help="Permite forzar un voice_id concreto.")
+    parser.add_argument("--voice-name", default="voz_principal", help="Nombre descriptivo de la voz.")
     parser.add_argument("--description", default=DEFAULT_DESCRIPTION, help="Descripcion natural de la voz.")
-    parser.add_argument("--reference-text", default=DEFAULT_REFERENCE_TEXT, help="Texto corto para generar la referencia.")
-    parser.add_argument("--reference-root", default=DEFAULT_REFERENCE_ROOT, help="Raiz de assets/voices.")
-    parser.add_argument("--language", default=DEFAULT_LANGUAGE, help="Idioma de la voz.")
+    parser.add_argument("--reference-text", default=DEFAULT_REFERENCE_TEXT, help="Texto corto para la referencia.")
+    parser.add_argument("--language", default=DEFAULT_LANGUAGE, help="Idioma.")
     parser.add_argument("--model-path", default=DEFAULT_MODEL_PATH, help="Ruta del modelo VoiceDesign.")
-    parser.add_argument("--device", default=DEFAULT_DEVICE, choices=["auto", "cpu", "cuda"], help="Device.")
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Seed para estabilidad.")
-    parser.add_argument("--overwrite", action="store_true", help="Sobrescribe reference.wav si existe.")
-    parser.add_argument(
-        "--use-flash-attn",
-        action="store_true",
-        default=DEFAULT_USE_FLASH_ATTN,
-        help="Usa flash_attention_2 si esta disponible.",
-    )
+    parser.add_argument("--device", default=DEFAULT_DEVICE, choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--assign-to-job", action="store_true", help="Asigna la voz al job si scope=job.")
+    parser.add_argument("--use-flash-attn", action="store_true", default=DEFAULT_USE_FLASH_ATTN)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    configure_runtime(dataset_root=args.dataset_root, jobs_root=args.jobs_root)
 
     try:
-        voice_name = normalize_text(args.voice_name).replace(" ", "_")
-        if not voice_name:
-            raise RuntimeError("voice_name no puede estar vacio")
-
         description = normalize_text(args.description)
         reference_text = normalize_text(args.reference_text)
-        if not description:
-            raise RuntimeError("description no puede estar vacia")
-        if not reference_text:
-            raise RuntimeError("reference_text no puede estar vacio")
-
-        target_dir = Path(args.reference_root) / voice_name
-        reference_wav = target_dir / "reference.wav"
-        reference_text_path = target_dir / "reference.txt"
-        metadata_path = target_dir / "voice.json"
-
-        if reference_wav.exists() and not args.overwrite:
-            raise RuntimeError(
-                f"Ya existe {reference_wav}. Usa --overwrite si quieres regenerar la referencia."
-            )
+        if args.scope == "job" and not args.job_id:
+            raise RuntimeError("job_id es obligatorio cuando scope=job")
+        if not description or not reference_text:
+            raise RuntimeError("description y reference_text no pueden estar vacios")
 
         set_global_seed(args.seed)
-        model, resolved_model_path = load_model(
-            model_path=args.model_path,
-            device_mode=args.device,
-            use_flash_attn=args.use_flash_attn,
-        )
-        generator = resolve_generate_voice_design_method(model)
+        model, resolved_model_path = load_model(args.model_path, args.device, args.use_flash_attn)
+        generator = getattr(model, "generate_voice_design", None)
+        if not callable(generator):
+            raise RuntimeError("La libreria qwen_tts no expone generate_voice_design()")
 
-        log(f"[design_voice] Generando referencia para voice_name={voice_name}")
         wavs, sample_rate = generator(
             text=reference_text,
             instruct=description,
@@ -215,27 +140,50 @@ def main() -> None:
         if not wavs:
             raise RuntimeError("generate_voice_design() no devolvio audio")
 
-        target_dir.mkdir(parents=True, exist_ok=True)
-        sf.write(str(reference_wav), wavs[0], sample_rate)
-        safe_write_text(reference_text_path, reference_text + "\n")
-        safe_write_json(
-            metadata_path,
-            {
-                "voice_name": voice_name,
-                "description": description,
-                "reference_text": reference_text,
-                "reference_wav": str(reference_wav),
-                "language": args.language,
-                "seed": args.seed,
-                "model_path": resolved_model_path,
-                "model_type": "voice_design",
-                "generated_at": now_iso(),
-            },
+        runtime = get_runtime_paths()
+        record = register_voice(
+            runtime,
+            scope=args.scope,
+            job_id=args.job_id,
+            voice_name=normalize_text(args.voice_name).replace(" ", "_"),
+            voice_description=description,
+            model_name=resolved_model_path,
+            language=args.language,
+            seed=args.seed,
+            voice_instruct=description,
+            engine="voice_design",
+            voice_id=args.voice_id,
+            notes="Referencia generada con Qwen3-TTS VoiceDesign.",
         )
 
+        voice_dir = runtime.voices_root / record["voice_id"]
+        reference_wav = voice_dir / "reference.wav"
+        reference_txt = voice_dir / "reference.txt"
+        sf.write(str(reference_wav), wavs[0], sample_rate)
+        reference_txt.write_text(reference_text + "\n", encoding="utf-8")
+
+        record = register_voice(
+            runtime,
+            scope=record["scope"],
+            job_id=record.get("job_id"),
+            voice_name=record["voice_name"],
+            voice_description=record["voice_description"],
+            model_name=record["model_name"],
+            language=record["language"],
+            seed=record["seed"],
+            voice_instruct=record["voice_instruct"],
+            reference_file=str(reference_wav),
+            engine="voice_design",
+            voice_id=record["voice_id"],
+            notes=record["notes"],
+        )
+
+        if args.assign_to_job and args.job_id:
+            job_paths = ensure_job_structure(build_job_paths(args.job_id, runtime))
+            assign_voice_to_job(job_paths, record, selection_mode="manual")
+
+        log(f"[design_voice] voice_id={record['voice_id']}")
         log(f"[design_voice] Referencia guardada en {reference_wav}")
-        log(f"[design_voice] Texto de referencia guardado en {reference_text_path}")
-        log(f"[design_voice] Metadata guardada en {metadata_path}")
 
     except Exception as exc:
         log(f"[design_voice] Error: {exc}")
