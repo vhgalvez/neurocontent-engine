@@ -54,10 +54,13 @@ EOF
   "updated_at": "",
   "voice_id": "",
   "voice_scope": "",
+  "voice_source": "",
   "voice_name": "",
   "voice_selection_mode": "",
   "voice_model_name": "",
-  "voice_reference_file": ""
+  "voice_reference_file": "",
+  "audio_file": "",
+  "audio_generated_at": ""
 }
 EOF
   fi

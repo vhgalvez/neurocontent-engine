@@ -31,8 +31,9 @@ def load_voice_index(runtime: RuntimePaths) -> dict[str, Any]:
     if payload:
         payload.setdefault("registry_version", "1.0")
         payload.setdefault("voices", [])
+        payload.setdefault("updated_at", "")
         return payload
-    return {"registry_version": "1.0", "voices": []}
+    return {"registry_version": "1.0", "voices": [], "updated_at": ""}
 
 
 def save_voice_index(runtime: RuntimePaths, payload: dict[str, Any]) -> None:
@@ -165,6 +166,7 @@ def load_job_document(job_paths: JobPaths) -> dict[str, Any]:
         current.setdefault("job_id", job_paths.job_id)
         current.setdefault("job_schema_version", "2.0")
         current.setdefault("voice", {})
+        current.setdefault("artifacts", {})
         return current
 
     return {
@@ -173,6 +175,7 @@ def load_job_document(job_paths: JobPaths) -> dict[str, Any]:
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "voice": {},
+        "artifacts": {},
     }
 
 
@@ -194,6 +197,7 @@ def assign_voice_to_job(
         "voice_id": voice_record.get("voice_id"),
         "scope": voice_record.get("scope"),
         "job_id": voice_record.get("job_id"),
+        "voice_source": selection_mode,
         "selection_mode": selection_mode,
         "voice_name": voice_record.get("voice_name"),
         "voice_description": voice_record.get("voice_description"),
@@ -207,6 +211,22 @@ def assign_voice_to_job(
         "status": voice_record.get("status"),
         "notes": notes,
         "assigned_at": now_iso(),
+    }
+    return save_job_document(job_paths, document)
+
+
+def update_job_artifact(
+    job_paths: JobPaths,
+    *,
+    artifact_type: str,
+    file_path: str,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    document = load_job_document(job_paths)
+    artifacts = document.setdefault("artifacts", {})
+    artifacts[artifact_type] = {
+        "file": file_path,
+        "generated_at": generated_at or now_iso(),
     }
     return save_job_document(job_paths, document)
 
@@ -248,3 +268,36 @@ def resolve_job_voice_assignment(
 
 def resolve_job_input_path(primary: Path, legacy_candidates: list[Path]) -> Path:
     return first_existing_path(primary, legacy_candidates)
+
+
+def validate_voice_record(record: dict[str, Any]) -> None:
+    required_keys = {
+        "voice_id",
+        "scope",
+        "voice_name",
+        "voice_description",
+        "model_name",
+        "language",
+        "voice_instruct",
+        "status",
+        "created_at",
+        "updated_at",
+    }
+    missing = [key for key in sorted(required_keys) if key not in record]
+    if missing:
+        raise ValueError(f"Voice record invalido. Faltan claves: {', '.join(missing)}")
+    if record["scope"] not in {"global", "job"}:
+        raise ValueError(f"Scope de voz invalido: {record['scope']}")
+
+
+def validate_voice_index(runtime: RuntimePaths) -> None:
+    payload = load_voice_index(runtime)
+    if payload.get("registry_version") != "1.0":
+        raise ValueError(f"registry_version no soportado: {payload.get('registry_version')}")
+    seen_ids: set[str] = set()
+    for record in payload.get("voices", []):
+        validate_voice_record(record)
+        voice_id = str(record["voice_id"])
+        if voice_id in seen_ids:
+            raise ValueError(f"voice_id duplicado en registry: {voice_id}")
+        seen_ids.add(voice_id)

@@ -50,10 +50,13 @@ STATUS_DEFAULTS = {
     "updated_at": "",
     "voice_id": "",
     "voice_scope": "",
+    "voice_source": "",
     "voice_name": "",
     "voice_selection_mode": "",
     "voice_model_name": "",
     "voice_reference_file": "",
+    "audio_file": "",
+    "audio_generated_at": "",
 }
 
 INDEX_COLUMNS = [
@@ -167,6 +170,8 @@ def update_status(
 def sync_status_with_files(paths: JobPaths) -> Dict[str, Any]:
     job_document = load_job_document(paths)
     voice = job_document.get("voice") or {}
+    artifacts = job_document.get("artifacts") or {}
+    audio_artifact = artifacts.get("audio") or {}
     return update_status(
         paths.status,
         brief_created=first_existing_path(paths.brief, paths.legacy_brief_candidates).exists(),
@@ -176,10 +181,13 @@ def sync_status_with_files(paths: JobPaths) -> Dict[str, Any]:
         visual_manifest_generated=first_existing_path(paths.manifest, paths.legacy_manifest_candidates).exists(),
         voice_id=voice.get("voice_id", ""),
         voice_scope=voice.get("scope", ""),
+        voice_source=voice.get("voice_source", voice.get("selection_mode", "")),
         voice_name=voice.get("voice_name", ""),
         voice_selection_mode=voice.get("selection_mode", ""),
         voice_model_name=voice.get("model_name", ""),
         voice_reference_file=voice.get("reference_file", "") or "",
+        audio_file=audio_artifact.get("file", ""),
+        audio_generated_at=audio_artifact.get("generated_at", ""),
     )
 
 
@@ -209,6 +217,7 @@ def ensure_job_metadata(paths: JobPaths, brief: Dict[str, Any]) -> Dict[str, Any
     )
     if not document.get("created_at"):
         document["created_at"] = now_iso()
+    document.setdefault("artifacts", {})
     return save_job_document(paths, document)
 
 
