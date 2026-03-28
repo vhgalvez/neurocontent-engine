@@ -102,6 +102,18 @@ Cada voz tiene:
 - una voz específica para un job
 - ejemplo: `voice_job_000001_0001`
 
+## Precedencia real de voz
+
+El código resuelve la voz en este orden:
+
+1. `--voice-id` explícito
+2. voz ya asignada en `jobs/<job_id>/job.json`
+3. `VIDEO_DEFAULT_VOICE_ID` como voz global por defecto
+4. fallback de compatibilidad:
+   en VoiceDesign se auto-registra una voz `job` desde preset/seed legacy si no existe ninguna asignación previa
+
+Ese origen queda registrado como `voice_source` y también como `voice_selection_mode`.
+
 ## Registry de voces
 
 Ubicación principal:
@@ -128,6 +140,11 @@ Ubicación principal:
 ```
 
 `status.json` replica los campos clave de trazabilidad para ver rápidamente qué voz se usó sin abrir todo el registry.
+También guarda:
+
+- `voice_source`
+- `audio_file`
+- `audio_generated_at`
 
 ## Flujos vocales soportados
 
@@ -206,6 +223,9 @@ Campos críticos:
 - `reference_file`
 - `voice_clone_prompt_path`
 - `selection_mode`
+- `voice_source`
+- `audio_file`
+- `audio_generated_at`
 
 ## Ejecución
 

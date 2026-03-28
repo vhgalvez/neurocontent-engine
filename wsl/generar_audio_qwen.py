@@ -4,6 +4,7 @@ import os
 import random
 import sys
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -262,7 +263,7 @@ def process_job(model, resolved_model_path: str, job_id: str, overwrite: bool, d
     set_global_seed(resolved_seed)
     wav, sample_rate = generate_audio(model=model, text=text, instruct=instruct, language=language)
     write_wav(job_paths.audio, wav, sample_rate)
-    generated_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).replace(microsecond=0).isoformat()
+    generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     update_job_artifact(
         job_paths,
         artifact_type="audio",

@@ -4,6 +4,7 @@ import os
 import random
 import sys
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 from config import configure_runtime, get_runtime_paths  # noqa: E402
 from director import update_status  # noqa: E402
 from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
-from voice_registry import assign_voice_to_job, get_voice, register_voice, resolve_job_voice_assignment, safe_read_json  # noqa: E402
+from voice_registry import assign_voice_to_job, register_voice, resolve_job_voice_assignment, safe_read_json, update_job_artifact, validate_voice_index  # noqa: E402
 
 DEFAULT_BASE_MODEL_PATH = os.getenv(
     "QWEN_TTS_BASE_MODEL_PATH",
@@ -220,6 +221,7 @@ def resolve_voice(job_paths, args: argparse.Namespace, resolved_model_path: str)
 def main() -> None:
     args = parse_args()
     configure_runtime(dataset_root=args.dataset_root, jobs_root=args.jobs_root)
+    validate_voice_index(get_runtime_paths())
 
     try:
         if not args.job_id and not args.text:
@@ -274,6 +276,7 @@ def main() -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         sf.write(str(output_path), wavs[0], sample_rate)
         log(f"[clone] Audio final guardado en {output_path}")
+        generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
         if record:
             updated_record = register_voice(
@@ -294,16 +297,25 @@ def main() -> None:
             )
             if job_paths:
                 assign_voice_to_job(job_paths, updated_record, selection_mode=selection_mode)
+                update_job_artifact(
+                    job_paths,
+                    artifact_type="audio",
+                    file_path=get_runtime_paths().to_dataset_relative(job_paths.audio),
+                    generated_at=generated_at,
+                )
                 update_status(
                     job_paths.status,
                     audio_generated=True,
                     last_step="audio_generated_voice_clone",
                     voice_id=updated_record["voice_id"],
                     voice_scope=updated_record["scope"],
+                    voice_source=selection_mode,
                     voice_name=updated_record["voice_name"],
                     voice_selection_mode=selection_mode,
                     voice_model_name=updated_record["model_name"],
                     voice_reference_file=updated_record.get("reference_file", "") or "",
+                    audio_file=get_runtime_paths().to_dataset_relative(job_paths.audio),
+                    audio_generated_at=generated_at,
                 )
 
     except Exception as exc:
