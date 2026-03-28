@@ -568,6 +568,24 @@ bash wsl/run_audio.sh --job-id 000002
 bash wsl/run_audio.sh --job-id 000003
 ```
 
+```bash
+bash -x wsl/run_design_voice.sh \
+  --scope global \
+  --voice-name marca_personal_es \
+  --description "Voz madura, profesional y sobria para la marca." \
+  --reference-text "Hola, esta es la voz oficial de la marca." \
+  2>&1 | tee /tmp/run_design_voice_debug.log
+  ```
+
+```bash
+tail -n 120 /tmp/run_design_voice_debug.log
+```
+
+```bash
+bash wsl/run_audio.sh
+```
+
+
 Ventajas:
 
 - maxima consistencia
@@ -618,6 +636,9 @@ bash wsl/run_design_voice.sh \
   --reference-text "Hola, esta es la voz de esta campaña." \
   --assign-to-job
 ```
+
+
+
 
 ### Usar una voz concreta en un job
 
