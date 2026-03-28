@@ -26,6 +26,12 @@ El repo mantiene compatibilidad razonable de lectura con `jobs/<job_id>/` dentro
 
 ## Nueva estructura de jobs
 
+
+```bash
+./create_video_jobs.sh
+```
+
+
 ```text
 video-dataset/
 ├── jobs/
