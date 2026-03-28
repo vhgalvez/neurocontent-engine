@@ -39,6 +39,24 @@ SCRIPT_REQUIRED_KEYS = {
     "guion_narrado",
 }
 
+RENDER_TARGET_ORDER = ["vertical", "horizontal"]
+RENDER_TARGET_ASPECT_RATIO = {
+    "vertical": "9:16",
+    "horizontal": "16:9",
+}
+RENDER_TARGET_SAFE_AREA = {
+    "vertical": "center-weighted mobile frame",
+    "horizontal": "wider composition for desktop and long-form framing",
+}
+RENDER_TARGET_PLATFORM_BEHAVIOR = {
+    "vertical": "short-form vertical video, fast clarity, early payoff",
+    "horizontal": "landscape framing, stronger lateral composition",
+}
+DEFAULT_RENDER_TARGETS = ["vertical"]
+DEFAULT_RENDER_TARGET = "vertical"
+DEFAULT_CONTENT_ORIENTATION = "portrait"
+DEFAULT_TARGET_ASPECT_RATIOS = ["9:16"]
+
 STATUS_DEFAULTS = {
     "brief_created": False,
     "script_generated": False,
@@ -57,6 +75,12 @@ STATUS_DEFAULTS = {
     "voice_reference_file": "",
     "audio_file": "",
     "audio_generated_at": "",
+    "render_targets": "vertical",
+    "default_render_target": "vertical",
+    "render_vertical_requested": True,
+    "render_horizontal_requested": False,
+    "render_vertical_ready": False,
+    "render_horizontal_ready": False,
 }
 
 INDEX_COLUMNS = [
@@ -66,6 +90,9 @@ INDEX_COLUMNS = [
     "idea_central",
     "platform",
     "language",
+    "render_targets",
+    "default_render_target",
+    "content_orientation",
     "brief_created",
     "script_generated",
     "audio_generated",
@@ -132,6 +159,109 @@ def _read_primary_or_legacy(primary: Path, legacy_candidates: list[Path], defaul
     return safe_read_json(resolved, default=default)
 
 
+def _parse_pipe_values(value: Any) -> List[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    return [item.strip().lower() for item in raw.split("|") if item.strip()]
+
+
+def _ordered_unique(items: List[str], allowed: List[str] | None = None) -> List[str]:
+    allowed_set = set(allowed or items)
+    unique: List[str] = []
+    for item in items:
+        if item in allowed_set and item not in unique:
+            unique.append(item)
+    return unique
+
+
+def _parse_render_targets(brief: Dict[str, Any]) -> List[str]:
+    parsed = _ordered_unique(_parse_pipe_values(brief.get("render_targets")), RENDER_TARGET_ORDER)
+    return parsed or DEFAULT_RENDER_TARGETS.copy()
+
+
+def _resolve_default_render_target(brief: Dict[str, Any], render_targets: List[str]) -> str:
+    candidate = str(brief.get("default_render_target", "") or "").strip().lower()
+    if candidate in render_targets:
+        return candidate
+    if render_targets:
+        return render_targets[0]
+    return DEFAULT_RENDER_TARGET
+
+
+def _resolve_content_orientation(brief: Dict[str, Any], render_targets: List[str]) -> str:
+    candidate = str(brief.get("content_orientation", "") or "").strip().lower()
+    if candidate in {"portrait", "landscape", "multi"}:
+        return candidate
+    if len(render_targets) > 1:
+        return "multi"
+    if render_targets == ["horizontal"]:
+        return "landscape"
+    return DEFAULT_CONTENT_ORIENTATION
+
+
+def _resolve_target_aspect_ratios(brief: Dict[str, Any], render_targets: List[str]) -> List[str]:
+    supported = list(RENDER_TARGET_ASPECT_RATIO.values())
+    parsed = _ordered_unique(_parse_pipe_values(brief.get("target_aspect_ratio")), supported)
+    expected = [RENDER_TARGET_ASPECT_RATIO[target] for target in render_targets] or DEFAULT_TARGET_ASPECT_RATIOS
+    if len(render_targets) > 1:
+        return expected
+    if parsed and parsed[0] == expected[0]:
+        return [expected[0]]
+    return [expected[0]]
+
+
+def _build_render_profiles(render_targets: List[str]) -> Dict[str, Dict[str, str]]:
+    profiles: Dict[str, Dict[str, str]] = {}
+    for target in render_targets:
+        profiles[target] = {
+            "aspect_ratio": RENDER_TARGET_ASPECT_RATIO[target],
+            "safe_area": RENDER_TARGET_SAFE_AREA[target],
+            "platform_behavior": RENDER_TARGET_PLATFORM_BEHAVIOR[target],
+        }
+    return profiles
+
+
+def resolve_render_config(brief: Dict[str, Any]) -> Dict[str, Any]:
+    render_targets = _parse_render_targets(brief)
+    default_target = _resolve_default_render_target(brief, render_targets)
+    content_orientation = _resolve_content_orientation(brief, render_targets)
+    aspect_ratios = _resolve_target_aspect_ratios(brief, render_targets)
+    render_profiles = _build_render_profiles(render_targets)
+    return {
+        "targets": render_targets,
+        "default_target": default_target,
+        "content_orientation": content_orientation,
+        "aspect_ratios": aspect_ratios,
+        "render_profiles": render_profiles,
+        "targets_csv": "|".join(render_targets),
+        "aspect_ratios_csv": "|".join(aspect_ratios),
+    }
+
+
+def _render_status_fields(render_config: Dict[str, Any]) -> Dict[str, Any]:
+    targets = set(render_config["targets"])
+    return {
+        "render_targets": render_config["targets_csv"],
+        "default_render_target": render_config["default_target"],
+        "render_vertical_requested": "vertical" in targets,
+        "render_horizontal_requested": "horizontal" in targets,
+        "render_vertical_ready": False,
+        "render_horizontal_ready": False,
+    }
+
+
+def _render_config_from_job_document(job_document: Dict[str, Any]) -> Dict[str, Any]:
+    render = job_document.get("render") or {}
+    brief_like = {
+        "render_targets": "|".join(render.get("targets", []) or []),
+        "default_render_target": render.get("default_target", ""),
+        "content_orientation": render.get("content_orientation", ""),
+        "target_aspect_ratio": "|".join(render.get("aspect_ratios", []) or []),
+    }
+    return resolve_render_config(brief_like)
+
+
 def load_status(status_path: Path) -> Dict[str, Any]:
     current = safe_read_json(status_path, default={}) or {}
     status = {**STATUS_DEFAULTS, **current}
@@ -169,6 +299,7 @@ def update_status(
 
 def sync_status_with_files(paths: JobPaths) -> Dict[str, Any]:
     job_document = load_job_document(paths)
+    render_config = _render_config_from_job_document(job_document)
     voice = job_document.get("voice") or {}
     artifacts = job_document.get("artifacts") or {}
     audio_artifact = artifacts.get("audio") or {}
@@ -188,12 +319,14 @@ def sync_status_with_files(paths: JobPaths) -> Dict[str, Any]:
         voice_reference_file=voice.get("reference_file", "") or "",
         audio_file=audio_artifact.get("file", ""),
         audio_generated_at=audio_artifact.get("generated_at", ""),
+        **_render_status_fields(render_config),
     )
 
 
 def ensure_job_metadata(paths: JobPaths, brief: Dict[str, Any]) -> Dict[str, Any]:
     runtime = get_runtime_paths()
     document = load_job_document(paths)
+    render_config = resolve_render_config(brief)
     document.update(
         {
             "job_id": paths.job_id,
@@ -201,6 +334,12 @@ def ensure_job_metadata(paths: JobPaths, brief: Dict[str, Any]) -> Dict[str, Any
             "title": brief.get("idea_central", ""),
             "language": brief.get("idioma", ""),
             "platform": brief.get("plataforma", ""),
+            "render": {
+                "targets": render_config["targets"],
+                "default_target": render_config["default_target"],
+                "content_orientation": render_config["content_orientation"],
+                "aspect_ratios": render_config["aspect_ratios"],
+            },
             "dataset_root": runtime.dataset_root.as_posix(),
             "jobs_root": runtime.jobs_root.as_posix(),
             "paths": {
@@ -293,12 +432,22 @@ def _normalize_brief(brief: Dict[str, Any]) -> Dict[str, str]:
         "tipo_cierre",
         "nivel_agresividad_copy",
         "objetivo_retencion",
+        "render_targets",
+        "default_render_target",
+        "content_orientation",
+        "target_aspect_ratio",
     }
 
     normalized: Dict[str, str] = {}
     for key in expected_keys:
         value = brief.get(key, "")
         normalized[key] = str(value).strip() if value is not None else ""
+
+    render_config = resolve_render_config(brief)
+    normalized["render_targets"] = render_config["targets_csv"]
+    normalized["default_render_target"] = render_config["default_target"]
+    normalized["content_orientation"] = render_config["content_orientation"]
+    normalized["target_aspect_ratio"] = render_config["aspect_ratios_csv"]
 
     return normalized
 
@@ -581,13 +730,22 @@ def _keywords_list(brief: Dict[str, Any]) -> List[str]:
 
 
 def _character_design(brief: Dict[str, Any]) -> Dict[str, Any]:
+    render_config = resolve_render_config(brief)
+    if render_config["content_orientation"] == "multi":
+        persona_function = (
+            "credible narrator or protagonist for short-form content that remains legible "
+            "across vertical and horizontal downstream renders"
+        )
+    else:
+        persona_function = (
+            "credible narrator or protagonist for short-form content who embodies "
+            "the problem-to-solution arc of the brief"
+        )
+
     return {
         "identity_anchor": brief.get("avatar", ""),
         "audience_mirror": brief.get("audiencia", ""),
-        "persona_function": (
-            "credible narrator or protagonist for short-form vertical content who embodies "
-            "the problem-to-solution arc of the brief"
-        ),
+        "persona_function": persona_function,
         "tone_alignment": brief.get("tono", ""),
         "styling_notes": brief.get("notas_direccion", ""),
         "consistency_rules": [
@@ -756,6 +914,9 @@ def _build_scene_plan(script: Dict[str, Any], brief: Dict[str, Any]) -> List[Dic
     groups = _distribute_sentences_across_scenes(sentence_chunks, specs)
     time_ranges = _scene_time_ranges(duration_sec, len(specs))
     character_design = _character_design(brief)
+    render_config = resolve_render_config(brief)
+    default_target = render_config["default_target"]
+    default_profile = render_config["render_profiles"][default_target]
 
     scene_plan: List[Dict[str, Any]] = []
     for index, spec in enumerate(specs, start=1):
@@ -770,7 +931,10 @@ def _build_scene_plan(script: Dict[str, Any], brief: Dict[str, Any]) -> List[Dic
             "style": brief.get("notas_direccion", "") or brief.get("referencias", ""),
             "keywords": keyword_list,
             "platform_bias": brief.get("plataforma", ""),
-            "aspect_ratio": "9:16",
+            "render_targets": render_config["targets"],
+            "default_render_target": default_target,
+            "content_orientation": render_config["content_orientation"],
+            "aspect_ratio": default_profile["aspect_ratio"],
             "motion_cue": brief.get("ritmo", ""),
             "composition_goal": spec["camera"],
             "negative_prompt": brief.get("prohibido", ""),
@@ -814,6 +978,9 @@ def build_visual_manifest(
     runtime = get_runtime_paths()
     paths = get_job_paths(job_id)
     job_document = load_job_document(paths)
+    render_config = _render_config_from_job_document(job_document)
+    default_target = render_config["default_target"]
+    default_profile = render_config["render_profiles"][default_target]
 
     return {
         "manifest_version": "2.0",
@@ -824,7 +991,12 @@ def build_visual_manifest(
         "platform": brief.get("plataforma", ""),
         "language": brief.get("idioma", ""),
         "duration_sec": _duration_seconds(brief),
-        "aspect_ratio": "9:16",
+        "aspect_ratio": default_profile["aspect_ratio"],
+        "render_targets": render_config["targets"],
+        "default_render_target": default_target,
+        "content_orientation": render_config["content_orientation"],
+        "target_aspect_ratios": render_config["aspect_ratios"],
+        "render_profiles": render_config["render_profiles"],
         "job": {
             "job_id": job_id,
             "job_schema_version": job_document.get("job_schema_version", "2.0"),
@@ -888,7 +1060,8 @@ def build_visual_manifest(
             "captions_source": "assets.subtitles",
             "voiceover_source": "assets.audio",
             "pacing": brief.get("ritmo", ""),
-            "platform_native_behavior": "short-form vertical video, fast clarity, early payoff",
+            "platform_native_behavior": default_profile["platform_behavior"],
+            "primary_safe_area": default_profile["safe_area"],
             "notes": (
                 "This repository stops at editorial preproduction. "
                 "The downstream visual repository is responsible for visual generation, "
@@ -908,6 +1081,7 @@ def write_index(rows: List[Dict[str, Any]]) -> None:
 
 
 def build_index_row(brief: Dict[str, Any], status: Dict[str, Any], job_id: str) -> Dict[str, Any]:
+    render_config = resolve_render_config(brief)
     return {
         "job_id": job_id,
         "source_id": str(brief.get("id", "")).strip(),
@@ -915,6 +1089,9 @@ def build_index_row(brief: Dict[str, Any], status: Dict[str, Any], job_id: str) 
         "idea_central": brief.get("idea_central", ""),
         "platform": brief.get("plataforma", ""),
         "language": brief.get("idioma", ""),
+        "render_targets": status.get("render_targets", render_config["targets_csv"]),
+        "default_render_target": status.get("default_render_target", render_config["default_target"]),
+        "content_orientation": render_config["content_orientation"],
         "brief_created": status["brief_created"],
         "script_generated": status["script_generated"],
         "audio_generated": status["audio_generated"],

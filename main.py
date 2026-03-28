@@ -20,6 +20,7 @@ from director import (
     safe_read_json,
     safe_write_json,
     sync_status_with_files,
+    resolve_render_config,
     update_status,
     validate_script_data,
     write_index,
@@ -66,6 +67,13 @@ REQUIRED_COLUMNS = {
     "objetivo_retencion",
 }
 
+OPTIONAL_RENDER_COLUMNS = {
+    "render_targets",
+    "default_render_target",
+    "content_orientation",
+    "target_aspect_ratio",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pipeline editorial de NeuroContent Engine.")
@@ -81,10 +89,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def _clean_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+    cleaned = {
         key: value.strip() if isinstance(value, str) else value
         for key, value in row.items()
     }
+    for key in OPTIONAL_RENDER_COLUMNS:
+        cleaned.setdefault(key, "")
+    return cleaned
 
 
 def _validate_headers(fieldnames: List[str] | None) -> None:
@@ -145,7 +156,27 @@ def _load_or_generate_manifest(
         existing_manifest = safe_read_json(manifest_input, default={}) or {}
         if not existing_manifest:
             raise ValueError(f"visual_manifest.json vacio o invalido para job {paths.job_id}")
+        manifest_needs_refresh = any(
+            key not in existing_manifest
+            for key in [
+                "render_targets",
+                "default_render_target",
+                "content_orientation",
+                "target_aspect_ratios",
+                "render_profiles",
+            ]
+        )
+        if manifest_needs_refresh:
+            existing_manifest = build_visual_manifest(
+                brief=brief,
+                script=script,
+                job_id=paths.job_id,
+                audio_path=paths.audio,
+                subtitles_path=paths.subtitles,
+            )
         if manifest_input != paths.manifest:
+            safe_write_json(paths.manifest, existing_manifest)
+        elif manifest_needs_refresh:
             safe_write_json(paths.manifest, existing_manifest)
         return existing_manifest
 
@@ -168,10 +199,21 @@ def _load_or_generate_manifest(
 def process_brief(brief: Dict[str, Any]) -> Dict[str, Any]:
     job_id = pad_job_id(brief.get("id"))
     paths = get_job_paths(job_id)
+    render_config = resolve_render_config(brief)
 
     ensure_job_metadata(paths, brief)
     safe_write_json(paths.brief, brief)
-    update_status(paths.status, brief_created=True, last_step="brief_synced_from_csv")
+    update_status(
+        paths.status,
+        brief_created=True,
+        render_targets=render_config["targets_csv"],
+        default_render_target=render_config["default_target"],
+        render_vertical_requested="vertical" in render_config["targets"],
+        render_horizontal_requested="horizontal" in render_config["targets"],
+        render_vertical_ready=False,
+        render_horizontal_ready=False,
+        last_step="brief_synced_from_csv",
+    )
 
     script = _load_or_generate_script(brief, paths)
     _load_or_generate_manifest(brief, script, paths)
@@ -183,6 +225,7 @@ def process_brief(brief: Dict[str, Any]) -> Dict[str, Any]:
 def build_error_index_row(brief: Dict[str, Any], message: str) -> Dict[str, Any]:
     job_id = pad_job_id(brief.get("id"))
     paths = get_job_paths(job_id)
+    render_config = resolve_render_config(brief)
 
     ensure_job_metadata(paths, brief)
     safe_write_json(paths.brief, brief)
@@ -191,6 +234,12 @@ def build_error_index_row(brief: Dict[str, Any], message: str) -> Dict[str, Any]
         brief_created=True,
         script_generated=first_existing_path(paths.script, paths.legacy_script_candidates).exists(),
         visual_manifest_generated=first_existing_path(paths.manifest, paths.legacy_manifest_candidates).exists(),
+        render_targets=render_config["targets_csv"],
+        default_render_target=render_config["default_target"],
+        render_vertical_requested="vertical" in render_config["targets"],
+        render_horizontal_requested="horizontal" in render_config["targets"],
+        render_vertical_ready=False,
+        render_horizontal_ready=False,
         last_step=f"error: {message}",
     )
     return build_index_row(brief, status, job_id)

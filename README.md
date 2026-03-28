@@ -2,6 +2,12 @@
 
 `neurocontent-engine` es un pipeline editorial y de preproducción para short-form content. El repositorio genera y mantiene artefactos por job, pero la raíz principal de esos artefactos ya no vive dentro del repo: vive en el dataset externo.
 
+El contrato editorial ahora soporta targets de render explícitos:
+
+- `vertical`
+- `horizontal`
+- `vertical|horizontal`
+
 ## Dataset y resolución de rutas
 
 Resolución de prioridad:
@@ -71,6 +77,158 @@ Todos los artefactos nuevos del job usan el mismo `job_id` en el nombre:
 - `jobs/000001/logs/000001_phase_editorial.log`
 
 `job.json` y `status.json` mantienen nombre fijo porque son el contrato estable del directorio del job.
+
+## Render targets editoriales
+
+El CSV `data/ideas.csv` acepta cuatro columnas nuevas:
+
+- `render_targets`
+- `default_render_target`
+- `content_orientation`
+- `target_aspect_ratio`
+
+Valores soportados:
+
+- `render_targets`: `vertical`, `horizontal`, `vertical|horizontal`
+- `default_render_target`: `vertical`, `horizontal`
+- `content_orientation`: `portrait`, `landscape`, `multi`
+- `target_aspect_ratio`: `9:16`, `16:9`, `9:16|16:9`
+
+Compatibilidad con CSV antiguos:
+
+- si esas columnas no existen, el pipeline sigue funcionando
+- defaults efectivos: `render_targets=vertical`, `default_render_target=vertical`, `content_orientation=portrait`, `target_aspect_ratio=9:16`
+
+Ejemplos en `ideas.csv`:
+
+```csv
+id,...,render_targets,default_render_target,content_orientation,target_aspect_ratio
+101,...,vertical,vertical,portrait,9:16
+102,...,horizontal,horizontal,landscape,16:9
+103,...,vertical|horizontal,vertical,multi,9:16|16:9
+```
+
+## Contrato de render derivado
+
+Los campos resueltos se propagan a:
+
+- `data/index.csv`
+- `jobs/<job_id>/job.json`
+- `jobs/<job_id>/status.json`
+- `jobs/<job_id>/source/<job_id>_visual_manifest.json`
+
+### `index.csv`
+
+El índice derivado ahora incluye:
+
+- `render_targets`
+- `default_render_target`
+- `content_orientation`
+
+Ejemplo:
+
+```csv
+job_id,source_id,estado_csv,idea_central,platform,language,render_targets,default_render_target,content_orientation,brief_created,script_generated,audio_generated,subtitles_generated,visual_manifest_generated,export_ready,last_step,updated_at
+000103,103,pending,ejemplo multi target,youtube,es,vertical|horizontal,vertical,multi,True,True,False,False,True,False,visual_manifest_generated,2026-03-28T17:55:46+00:00
+```
+
+### `job.json`
+
+Ejemplo vertical:
+
+```json
+{
+  "render": {
+    "targets": ["vertical"],
+    "default_target": "vertical",
+    "content_orientation": "portrait",
+    "aspect_ratios": ["9:16"]
+  }
+}
+```
+
+Ejemplo horizontal:
+
+```json
+{
+  "render": {
+    "targets": ["horizontal"],
+    "default_target": "horizontal",
+    "content_orientation": "landscape",
+    "aspect_ratios": ["16:9"]
+  }
+}
+```
+
+Ejemplo multi target:
+
+```json
+{
+  "render": {
+    "targets": ["vertical", "horizontal"],
+    "default_target": "vertical",
+    "content_orientation": "multi",
+    "aspect_ratios": ["9:16", "16:9"]
+  }
+}
+```
+
+### `status.json`
+
+`status.json` mantiene compatibilidad con el estado actual y añade:
+
+- `render_targets`
+- `default_render_target`
+- `render_vertical_requested`
+- `render_horizontal_requested`
+- `render_vertical_ready`
+- `render_horizontal_ready`
+
+Ejemplo:
+
+```json
+{
+  "render_targets": "vertical|horizontal",
+  "default_render_target": "vertical",
+  "render_vertical_requested": true,
+  "render_horizontal_requested": true,
+  "render_vertical_ready": false,
+  "render_horizontal_ready": false
+}
+```
+
+### `visual_manifest.json`
+
+El manifest ya no asume `9:16` como contrato universal. Ahora expone:
+
+- `render_targets`
+- `default_render_target`
+- `content_orientation`
+- `target_aspect_ratios`
+- `render_profiles`
+
+Ejemplo multi target:
+
+```json
+{
+  "render_targets": ["vertical", "horizontal"],
+  "default_render_target": "vertical",
+  "content_orientation": "multi",
+  "target_aspect_ratios": ["9:16", "16:9"],
+  "render_profiles": {
+    "vertical": {
+      "aspect_ratio": "9:16",
+      "safe_area": "center-weighted mobile frame",
+      "platform_behavior": "short-form vertical video, fast clarity, early payoff"
+    },
+    "horizontal": {
+      "aspect_ratio": "16:9",
+      "safe_area": "wider composition for desktop and long-form framing",
+      "platform_behavior": "landscape framing, stronger lateral composition"
+    }
+  }
+}
+```
 
 ## Voz: arquitectura nueva
 
