@@ -233,6 +233,10 @@ Usa este modo cuando quieras:
 ## Comando recomendado
 
 ```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
+```
+
+```bash
 bash wsl/run_design_voice.sh \
   --scope global \
   --voice-name marca_personal_es \
