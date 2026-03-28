@@ -277,3 +277,10 @@ cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/neurocontent-engine
 conda activate comfy
 cd C:\Users\vhgal\AppData\Local\Programs\ComfyUI\resources\ComfyUI
 python main.py --listen 127.0.0.1 --port 8188 --enable-cors-header *
+
+
+
+
+chmod +x /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/create_video_jobs.sh
+
+bash /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/create_video_jobs.sh
