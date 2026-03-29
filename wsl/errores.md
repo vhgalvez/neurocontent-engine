@@ -1,144 +1,310 @@
-Estado funcional verificado — Qwen3-TTS GPU en WSL2
-1. Entorno que sí funciona
-Sistema
-Windows + WSL2
-Ubuntu 24.04 LTS
-Kernel: 5.15.167.4-microsoft-standard-WSL2
-Hardware
-GPU: NVIDIA GeForce RTX 4070
-RAM: ~23 GiB
-Disco raíz WSL (/) con espacio suficiente
-Entorno Python válido
-Conda env: qwen_gpu
-Python: 3.12
-2. Stack que quedó funcionando
-PyTorch
-pytorch==2.5.1
-torchvision==0.20.1
-torchaudio==2.5.1
-pytorch-cuda=12.4
-Ajuste crítico que arregló el error
+# Troubleshooting y Estado Verificado de Qwen3-TTS en WSL2
 
-Se tuvo que bajar:
+## Propósito de este documento
 
-mkl -> 2023.2.0
+Este archivo reúne dos cosas distintas que antes estaban mezcladas de forma poco estructurada:
 
-Porque con MKL más nuevo aparecía:
+1. el estado verificado del entorno funcional de Qwen3-TTS sobre WSL2
+2. una guía operativa de troubleshooting para los problemas más comunes del stack de audio y voces
 
-ImportError: ... libtorch_cpu.so: undefined symbol: iJIT_NotifyEvent
-3. Verificaciones reales que salieron bien
-Import de PyTorch con CUDA
+No sustituye a la guía funcional del sistema de voces. Para eso consulta:
+
+- [VOICE_SYSTEM_GUIDE.md](VOICE_SYSTEM_GUIDE.md)
+
+## A. Entorno funcional verificado
+
+### Sistema operativo y plataforma
+
+El entorno que quedó validado como funcional para Qwen3-TTS es:
+
+- Windows con WSL2
+- Ubuntu 24.04 LTS
+- kernel `5.15.167.4-microsoft-standard-WSL2`
+
+### Hardware verificado
+
+- GPU: NVIDIA GeForce RTX 4070
+- memoria disponible suficiente para el flujo operativo de prueba
+- almacenamiento WSL con espacio suficiente
+
+### Entorno Python válido
+
+El entorno que debe usarse es:
+
+```bash
+conda activate qwen_gpu
+```
+
+Python válido:
+
+```bash
+/home/victory/miniconda3/envs/qwen_gpu/bin/python
+```
+
+El `venv` antiguo:
+
+```bash
+/home/victory/Qwen3-TTS/venv/bin/python
+```
+
+ya no debe usarse.
+
+### Stack funcional verificado
+
+- Python `3.12`
+- `torch==2.5.1`
+- `torchvision==0.20.1`
+- `torchaudio==2.5.1`
+- `pytorch-cuda=12.4`
+- `qwen_tts` importando correctamente
+
+### Qué se probó y qué funcionó
+
+Se validaron las siguientes comprobaciones operativas:
+
+- import de PyTorch con CUDA activa
+- ejecución real de operaciones tensoriales en GPU
+- import correcto de `torchaudio`
+- import correcto de `torchvision`
+- import correcto de `qwen_tts`
+- generación de referencia con `run_design_voice.sh`
+
+Comandos de verificación usados:
+
+```bash
 python -c "import torch; print('cuda', torch.cuda.is_available()); print('gpu', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'Ninguna')"
-
-Salida válida:
-
-cuda True
-gpu NVIDIA GeForce RTX 4070
-Operación real en GPU
 python -c "import torch; x=torch.randn(1024,1024,device='cuda'); y=x@x.T; print('OK GPU', y.shape, y.device)"
-
-Salida válida:
-
-OK GPU torch.Size([1024, 1024]) cuda:0
-Imports válidos
 python -c "import torchaudio; print('torchaudio', torchaudio.__version__)"
 python -c "import torchvision; print('torchvision', torchvision.__version__)"
 python -c "import qwen_tts; print('qwen_tts OK')"
+```
 
-Salidas válidas:
+Salida esperada:
 
+```text
+cuda True
+gpu NVIDIA GeForce RTX 4070
+OK GPU torch.Size([1024, 1024]) cuda:0
 torchaudio 2.5.1
 torchvision 0.20.1
 qwen_tts OK
-4. Entorno correcto que hay que usar siempre
+```
 
-El Python bueno ahora es:
+## B. QWEN_PYTHON y wrappers WSL
 
-/home/victory/miniconda3/envs/qwen_gpu/bin/python
-Muy importante
+`QWEN_PYTHON` es la variable que usan los wrappers Bash de `wsl/` para decidir con qué intérprete Python deben ejecutar los scripts de audio, diseño de voz y borrado de voces.
 
-El entorno viejo tipo:
+Wrappers relevantes:
 
-/home/victory/Qwen3-TTS/venv/bin/python
+- `wsl/run_design_voice.sh`
+- `wsl/run_audio.sh`
+- `wsl/run_generate_audio_from_prompt.sh`
+- `wsl/run_delete_voice.sh`
 
-ya no es el que debes usar.
+### Por qué antes fallaba
 
-5. Qué hay que dejar configurado en el proyecto
+Antes existía un fallback al `venv` antiguo. Cuando ese entorno dejó de existir o dejó de ser el entorno correcto, los wrappers seguían intentando ejecutar Python desde una ruta inválida o desactualizada.
 
-En `wsl/voices.env` debe quedar así para mantener el override externo de `QWEN_PYTHON`:
+### Valor correcto actual
 
+El fallback correcto es:
+
+```bash
 export QWEN_PYTHON="${QWEN_PYTHON:-/home/victory/miniconda3/envs/qwen_gpu/bin/python}"
+```
 
-Y cualquier script que apunte al venv viejo hay que cambiarlo a esa ruta.
+Esto resuelve dos problemas:
 
-6. Comandos correctos para entrar al entorno
-conda activate qwen_gpu
-cd ~/Qwen3-TTS
-7. Qué no tocar otra vez
+- el sistema usa por defecto el Python bueno del entorno validado
+- un override externo sigue funcionando porque la sintaxis `${QWEN_PYTHON:-...}` no pisa un valor ya exportado
 
-No volver a mezclar:
+### Verificación rápida
 
-base de conda con el entorno de Qwen
-venv viejos borrados
-PyTorch CPU con torchaudio CUDA
-versiones aleatorias de torch, torchvision, torchaudio
-reinstalaciones de CUDA al azar
-variables raras de LD_LIBRARY_PATH sin necesidad
-8. Warning que no bloquea
-
-Este warning apareció pero no impidió que funcione:
-
-Warning: flash-attn is not installed. Will only run the manual PyTorch version.
-
-Eso significa:
-
-el entorno funciona
-solo falta optimizar velocidad más adelante
-
-También apareció esto:
-
-onnxruntime ... Failed to open file: "/sys/class/drm/card0/device/vendor"
-
-Pero tampoco bloqueó el import ni el funcionamiento base.
-
-9. Orden correcto a partir de ahora
-Siempre hacer esto primero
-conda activate qwen_gpu
-cd ~/Qwen3-TTS
-Verificación rápida
-python -c "import torch; print(torch.cuda.is_available())"
-
-Debe dar:
-
-True
-10. Foto final del estado bueno
-FUNCIONA
-WSL2
-Python 3.12
-conda env qwen_gpu
-PyTorch 2.5.1 + CUDA 12.4
-torchaudio 2.5.1
-torchvision 0.20.1
-qwen_tts importando
-GPU RTX 4070 operativa
-NO optimizado todavía
-flash-attn no instalado aún
-11. Comando base de rescate futuro
-
-Si alguna vez dudas si estás en el entorno bueno:
-
+```bash
 conda activate qwen_gpu
 which python
 python -V
+```
+
+## C. Problemas típicos y resolución
+
+### 1. Error por Python inexistente o incorrecto
+
+Síntoma:
+
+```text
+ERROR: no existe Python ejecutable en ...
+```
+
+Causa probable:
+
+- `QWEN_PYTHON` apunta al `venv` antiguo
+- el entorno `qwen_gpu` no está disponible en la ruta esperada
+- se ejecutó el wrapper con una variable externa mal exportada
+
+Qué hacer:
+
+```bash
+conda activate qwen_gpu
+which python
+python -V
+echo "$QWEN_PYTHON"
+```
+
+Qué no hacer:
+
+- no volver a apuntar a `/home/victory/Qwen3-TTS/venv/bin/python`
+
+### 2. CUDA no disponible
+
+Síntoma:
+
+```text
+QWEN_TTS_DEVICE=cuda pero CUDA no esta disponible
+```
+
+Causa probable:
+
+- no estás en el entorno `qwen_gpu`
+- la GPU no está expuesta correctamente dentro de WSL2
+- se está usando otro Python distinto del entorno validado
+
+Qué hacer:
+
+```bash
+conda activate qwen_gpu
+python -c "import torch; print(torch.cuda.is_available())"
+python -c "import torch; print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'Ninguna')"
+```
+
+### 3. Error al importar `torch`
+
+Síntoma histórico observado:
+
+```text
+ImportError: ... libtorch_cpu.so: undefined symbol: iJIT_NotifyEvent
+```
+
+Ese problema apareció con combinaciones incompatibles del stack MKL/PyTorch. En el entorno validado se resolvió dejando un stack consistente y evitando reinstalaciones aleatorias.
+
+Qué no hacer:
+
+- no mezclar PyTorch CPU con `torchaudio` CUDA
+- no mezclar entornos base y `venv` antiguos
+- no reinstalar paquetes críticos sin criterio
+
+### 4. `qwen_tts` no importa
+
+Causa probable:
+
+- entorno Python incorrecto
+- dependencia no instalada en ese entorno
+- el wrapper está ejecutando otro Python
+
+Qué hacer:
+
+```bash
+conda activate qwen_gpu
+python -c "import qwen_tts; print('qwen_tts OK')"
+```
+
+### 5. Error de registry o de integridad de voces
+
+Síntomas posibles:
+
+- `voice_id duplicado en registry`
+- `voice_name duplicado en registry`
+- falta carpeta física de una voz
+- falta `voice.json`
+- `voice.json` no coincide con `voices_index.json`
+
+Causa probable:
+
+- edición manual del registry
+- borrado manual de carpetas en `video-dataset/voices/`
+- alta previa ambigua con documentación vieja o prácticas antiguas
+
+Qué hacer:
+
+- dejar de borrar carpetas manualmente
+- usar el flujo oficial de borrado
+- revisar `voice_registry.py`
+- revisar `wsl/VOICE_SYSTEM_GUIDE.md`
+
+### 6. Error por `voice_name` duplicado
+
+Síntoma:
+
+```text
+ERROR: ya existe una voz con ese nombre
+```
+
+Significado:
+
+Ahora el registry exige unicidad lógica de `voice_name`. Esto evita que existan varias voces distintas con el mismo alias humano.
+
+Qué hacer:
+
+- elegir un `voice_name` nuevo
+- o usar directamente el `voice_id` de una voz ya registrada en vez de crear otra
+
+### 7. Error por `voice_name` con forma de ID interno
+
+Síntoma:
+
+```text
+ERROR: voice_name no puede parecer un voice_id interno del sistema
+```
+
+Significado:
+
+`voice_name` es un alias lógico, no un identificador técnico. Nombres como `voice_global_0001` o `voice_job_000001_0001` son peligrosos porque se confunden con `voice_id`.
+
+## D. Qué hacer y qué NO hacer
+
+### Haz esto
+
+```bash
+conda activate qwen_gpu
+which python
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+python -c "import qwen_tts; print('qwen_tts OK')"
+```
 
-Esperado:
+### No hagas esto
 
-Python del env qwen_gpu
-Python 3.12
-torch 2.5.1
-CUDA True
-12. Próximo paso lógico
+- no usar `/home/victory/Qwen3-TTS/venv/bin/python`
+- no borrar carpetas a mano dentro de `video-dataset/voices/`
+- no editar `voices_index.json` manualmente salvo diagnóstico excepcional y controlado
+- no reutilizar `voice_name` ya existentes
+- no crear `voice_name` con formato parecido a `voice_global_0001`
 
-No reinstalar nada.
-El siguiente paso es probar generación real de audio con este entorno exacto y luego optimizar rendimiento
+## E. Orden operativo recomendado
+
+```bash
+conda activate qwen_gpu
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
+Después:
+
+- diseñar voz con `bash wsl/run_design_voice.sh ...`
+- generar audio con `bash wsl/run_audio.sh ...`
+- borrar voz solo con `bash wsl/run_delete_voice.sh --voice-id <id>`
+
+## F. Observaciones históricas útiles
+
+Durante la puesta a punto aparecieron warnings que no bloquearon el funcionamiento base:
+
+```text
+Warning: flash-attn is not installed. Will only run the manual PyTorch version.
+```
+
+y también:
+
+```text
+onnxruntime ... Failed to open file: "/sys/class/drm/card0/device/vendor"
+```
+
+Ambos mensajes quedaron registrados porque son útiles para troubleshooting futuro, pero no invalidaron el entorno operativo verificado.
