@@ -820,7 +820,7 @@ def main() -> None:
             explicit_voice_id=args.voice_id,
             explicit_voice_name=args.voice_name,
         )
-        resolved_voice_design_model_path = resolve_model_path(args.model_path)
+        resolved_voice_design_model_path = resolve_model_path(args.model_path) if "voice_design" in required_models else ""
         log(
             "[audio] Model plan: "
             f"voice_design={'yes' if 'voice_design' in required_models else 'no'}, "
