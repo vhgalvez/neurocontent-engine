@@ -1269,9 +1269,14 @@ Si tu objetivo es producir contenido sin complicarte, usa esta secuencia:
 conda activate qwen_gpu
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
 python main.py
+
 bash wsl/run_design_voice.sh --scope global --voice-name marca_personal_es --description "Voz madura, profesional y sobria para la marca." --reference-text "Hola, esta es la voz oficial de la marca."
 
+export VIDEO_DEFAULT_VOICE_ID="voice_global_0001"
+
+
 bash wsl/run_audio.sh --voice-name marca_personal_es --overwrite
+
 bash wsl/run_audio.sh --job-id 000001 --voice-name marca_personal_es --overwrite
 bash wsl/run_subs.sh --job-id 000001
 ```
@@ -1279,3 +1284,18 @@ bash wsl/run_subs.sh --job-id 000001
 Y luego entregas el job resultante al pipeline visual downstream.
 
 ---
+
+
+
+
+bash wsl/run_delete_voice.sh --voice-id voice_global_0001
+
+bash wsl/run_reset_audio_state.sh --scope all --dry-run
+
+bash wsl/run_reset_audio_state.sh --scope all --confirm
+
+
+bash wsl/run_reset_audio_state.sh --scope voices --confirm
+
+
+bash wsl/run_reset_audio_state.sh --scope generated --confirm
