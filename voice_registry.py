@@ -497,6 +497,9 @@ def update_job_audio_synthesis(
     seed_source: str = "",
     preset_source: str = "",
     runtime_source: str = "",
+    identity_consistency_mode: str = "",
+    identity_consistency_note: str = "",
+    reference_runtime_used: bool = False,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     document = load_job_document(job_paths)
@@ -517,6 +520,9 @@ def update_job_audio_synthesis(
         "seed_source": seed_source,
         "preset_source": preset_source,
         "runtime_source": runtime_source,
+        "identity_consistency_mode": identity_consistency_mode,
+        "identity_consistency_note": identity_consistency_note,
+        "reference_runtime_used": bool(reference_runtime_used),
         "generated_at": generated_at or now_iso(),
     }
     return save_job_document(job_paths, document)
