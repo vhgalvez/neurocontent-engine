@@ -24,7 +24,8 @@ from voice_registry import (  # noqa: E402
     load_job_document,
     normalize_voice_record,
     register_voice,
-    resolve_job_voice_assignment,
+    resolve_voice_selection,
+    resolve_voice_runtime_strategy,
     resolve_tts_strategy_default,
     resolve_voice_mode,
     safe_read_json,
@@ -224,6 +225,10 @@ def build_synthesis_trace(
     reference_conditioning_used: bool = False,
     clone_prompt_used: bool = False,
     voice_preset_used: str = "",
+    voice_instruct_source: str = "",
+    seed_source: str = "",
+    preset_source: str = "",
+    runtime_source: str = "voice_registry.resolve_voice_runtime_strategy",
 ) -> dict[str, Any]:
     return {
         "requested": requested,
@@ -234,6 +239,10 @@ def build_synthesis_trace(
         "reference_conditioning_used": bool(reference_conditioning_used),
         "clone_prompt_used": bool(clone_prompt_used),
         "voice_preset_used": voice_preset_used,
+        "voice_instruct_source": voice_instruct_source,
+        "seed_source": seed_source,
+        "preset_source": preset_source,
+        "runtime_source": runtime_source,
     }
 
 
@@ -258,9 +267,14 @@ def build_voice_instruction(preset_name: str, seed: int, description: str = "", 
     return preset_name, instruct, seed
 
 
-def resolve_or_register_voice(job_paths, explicit_voice_id: str | None, resolved_model_path: str, default_preset: str, default_seed: int, language: str):
+def resolve_or_register_voice(job_paths, explicit_voice_id: str | None, explicit_voice_name: str | None, resolved_model_path: str, default_preset: str, default_seed: int, language: str):
     runtime = get_runtime_paths()
-    assigned = resolve_job_voice_assignment(runtime, job_paths, explicit_voice_id=explicit_voice_id)
+    assigned = resolve_voice_selection(
+        runtime,
+        job_paths=job_paths,
+        explicit_voice_id=explicit_voice_id,
+        explicit_voice_name=explicit_voice_name,
+    )
     if assigned:
         record = normalize_voice_record(assigned["record"])
         return record, assigned["selection_mode"]
@@ -313,6 +327,34 @@ def generate_audio_voice_design(model, text: str, instruct: str, language: str):
     return wavs[0], sample_rate
 
 
+def synthesize_voice_design_from_registry(model, text: str, language: str, record: dict[str, Any], default_seed: int):
+    instruct = normalize_text(record.get("voice_instruct", "") or record.get("voice_description", ""))
+    if not instruct:
+        raise RuntimeError(
+            f"La voz {record.get('voice_id', '')} no tiene voice_instruct ni voice_description para VoiceDesign."
+        )
+    resolved_seed = int(record.get("seed", default_seed))
+    set_global_seed(resolved_seed)
+    wav, sample_rate = generate_audio_voice_design(
+        model=model,
+        text=text,
+        instruct=instruct,
+        language=record.get("language") or language,
+    )
+    return wav, sample_rate, build_synthesis_trace(
+        requested=resolve_requested_strategy(record),
+        used="voice_design_from_registry",
+        fallback_used=False,
+        engine_used="voice_design",
+        reference_conditioning_used=False,
+        clone_prompt_used=False,
+        voice_preset_used=record.get("voice_preset", ""),
+        voice_instruct_source="voice_record.voice_instruct" if record.get("voice_instruct") else "voice_record.voice_description",
+        seed_source="voice_record.seed" if record.get("seed") is not None else "global_default_seed",
+        preset_source="voice_record" if record.get("voice_preset") else "not_used",
+    )
+
+
 def generate_audio_voice_clone(model, text: str, language: str, prompt_items: list[VoiceClonePromptItem]):
     generator = resolve_generate_voice_clone_method(model)
     wavs, sample_rate = generator(
@@ -354,6 +396,9 @@ def synthesize_description_seed_preset(model, text: str, language: str, record: 
         reference_conditioning_used=False,
         clone_prompt_used=False,
         voice_preset_used=preset_name,
+        voice_instruct_source="legacy_preset_builder",
+        seed_source="voice_record.seed" if record.get("seed") is not None else "global_default_seed",
+        preset_source="voice_record" if record.get("voice_preset") else "global_default",
     )
 
 
@@ -370,6 +415,9 @@ def synthesize_reference_conditioned(model, text: str, language: str, record: di
         reference_conditioning_used=True,
         clone_prompt_used=False,
         voice_preset_used="",
+        voice_instruct_source="not_used",
+        seed_source="not_used",
+        preset_source="not_used",
     )
 
 
@@ -387,6 +435,9 @@ def synthesize_clone_prompt(model, text: str, language: str, record: dict[str, A
         reference_conditioning_used=False,
         clone_prompt_used=True,
         voice_preset_used="",
+        voice_instruct_source="not_used",
+        seed_source="not_used",
+        preset_source="not_used",
     )
 
 
@@ -398,8 +449,12 @@ def write_wav(path: Path, wav: np.ndarray, sample_rate: int) -> None:
 def log_strategy_summary(job_id: str, record: dict[str, Any], trace: dict[str, Any]) -> None:
     log(f"[{job_id}] Voice resolved: {record.get('voice_id', '')} mode={record.get('voice_mode', '')}")
     log(f"[{job_id}] Requested strategy: {trace['requested']}")
+    log(f"[{job_id}] Runtime source: {trace.get('runtime_source', 'unknown')}")
+    log(f"[{job_id}] Voice instruct source: {trace.get('voice_instruct_source', 'unknown')}")
+    log(f"[{job_id}] Seed source: {trace.get('seed_source', 'unknown')}")
+    log(f"[{job_id}] Preset source: {trace.get('preset_source', 'unknown')}")
     if trace.get("voice_preset_used"):
-        preset_source = "voice_record" if record.get("voice_preset") else "global_default"
+        preset_source = trace.get("preset_source", "unknown")
         log(f"[{job_id}] Preset used: {trace['voice_preset_used']} (source={preset_source})")
     if trace["fallback_used"]:
         log(f"[{job_id}] Fallback strategy used: {trace['used']}")
@@ -419,78 +474,50 @@ def synthesize_audio_for_record(
     base_model,
 ) -> tuple[np.ndarray, int, dict[str, Any]]:
     requested = resolve_requested_strategy(record)
+    runtime_strategy = resolve_voice_runtime_strategy(record)
+    effective_strategy = runtime_strategy["voice_strategy"]
 
-    if requested == "clone_prompt":
-        try:
-            return synthesize_clone_prompt(base_model, text, language, record)
-        except Exception as exc:
-            fallback_reason = (
-                "clone_prompt no pudo ejecutarse en este flujo: "
-                f"{exc}"
-            )
-            wav, sample_rate, trace = synthesize_description_seed_preset(
-                voice_design_model,
-                text,
-                language,
-                record,
-                default_preset,
-                default_seed,
-            )
-            trace.update(
-                build_synthesis_trace(
-                    requested=requested,
-                    used="description_seed_preset",
-                    fallback_used=True,
-                    fallback_reason=fallback_reason,
-                    engine_used="voice_design",
-                    reference_conditioning_used=False,
-                    clone_prompt_used=False,
-                    voice_preset_used=trace["voice_preset_used"],
-                )
-            )
-            return wav, sample_rate, trace
+    if effective_strategy == "voice_design_from_registry":
+        return synthesize_voice_design_from_registry(
+            voice_design_model,
+            text,
+            language,
+            record,
+            default_seed,
+        )
 
-    if requested == "reference_conditioned":
-        try:
-            return synthesize_reference_conditioned(base_model, text, language, record)
-        except Exception as exc:
-            fallback_reason = (
-                "Current synthesis path could not consume reference conditioning directly: "
-                f"{exc}"
-            )
-            wav, sample_rate, trace = synthesize_description_seed_preset(
-                voice_design_model,
-                text,
-                language,
-                record,
-                default_preset,
-                default_seed,
-            )
-            trace.update(
-                build_synthesis_trace(
-                    requested=requested,
-                    used="description_seed_preset",
-                    fallback_used=True,
-                    fallback_reason=fallback_reason,
-                    engine_used="voice_design",
-                    reference_conditioning_used=False,
-                    clone_prompt_used=False,
-                    voice_preset_used=trace["voice_preset_used"],
-                )
-            )
-            return wav, sample_rate, trace
-
-    wav, sample_rate, trace = synthesize_description_seed_preset(
-        voice_design_model,
-        text,
-        language,
-        record,
-        default_preset,
-        default_seed,
-    )
-    if requested in {"legacy_preset_fallback", "description_seed_preset"}:
+    if effective_strategy == "legacy_preset_fallback":
+        wav, sample_rate, trace = synthesize_description_seed_preset(
+            voice_design_model,
+            text,
+            language,
+            record,
+            default_preset,
+            default_seed,
+        )
+        trace["used"] = "legacy_preset_fallback"
         trace["requested"] = requested
-    return wav, sample_rate, trace
+        return wav, sample_rate, trace
+
+    if effective_strategy == "base_clone_from_prompt":
+        if base_model is None:
+            raise RuntimeError(
+                "La voz existe y requiere clone_prompt, pero el modelo Base no esta disponible en este runtime."
+            )
+        return synthesize_clone_prompt(base_model, text, language, record)
+
+    if effective_strategy == "base_clone_from_reference":
+        if base_model is None:
+            raise RuntimeError(
+                "La voz existe y requiere reference_conditioned, pero el modelo Base no esta disponible en este runtime."
+            )
+        return synthesize_reference_conditioned(base_model, text, language, record)
+
+    raise RuntimeError(
+        "La voz existe, pero el runtime no pudo mapearla a una estrategia de sintesis compatible "
+        f"(voice_id={record.get('voice_id', '')}, voice_mode={record.get('voice_mode', '')}, "
+        f"tts_strategy_default={requested})."
+    )
 
 
 def process_job(
@@ -503,10 +530,16 @@ def process_job(
     default_seed: int,
     language: str,
     explicit_voice_id: str | None,
+    explicit_voice_name: str | None,
 ) -> None:
     job_paths = ensure_job_structure(build_job_paths(job_id, get_runtime_paths()))
     if job_paths.audio.exists() and not overwrite:
-        assigned = resolve_job_voice_assignment(get_runtime_paths(), job_paths, explicit_voice_id=explicit_voice_id)
+        assigned = resolve_voice_selection(
+            get_runtime_paths(),
+            job_paths=job_paths,
+            explicit_voice_id=explicit_voice_id,
+            explicit_voice_name=explicit_voice_name,
+        )
         record = normalize_voice_record(assigned["record"]) if assigned else {}
         audio_synthesis = load_job_document(job_paths).get("audio_synthesis", {})
         update_status(
@@ -537,6 +570,7 @@ def process_job(
     record, selection_mode = resolve_or_register_voice(
         job_paths=job_paths,
         explicit_voice_id=explicit_voice_id,
+        explicit_voice_name=explicit_voice_name,
         resolved_model_path=voice_design_model_path,
         default_preset=default_preset,
         default_seed=default_seed,
@@ -572,6 +606,10 @@ def process_job(
         reference_conditioning_used=trace["reference_conditioning_used"],
         clone_prompt_used=trace["clone_prompt_used"],
         voice_preset_used=trace["voice_preset_used"],
+        voice_instruct_source=trace.get("voice_instruct_source", ""),
+        seed_source=trace.get("seed_source", ""),
+        preset_source=trace.get("preset_source", ""),
+        runtime_source=trace.get("runtime_source", ""),
         generated_at=generated_at,
     )
     update_status(
@@ -606,6 +644,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jobs-root", help="Override para VIDEO_JOBS_ROOT.")
     parser.add_argument("--job-id", action="append", dest="job_ids", help="Procesa un job especifico. Repetible.")
     parser.add_argument("--voice-id", help="Selecciona una voz ya registrada.")
+    parser.add_argument("--voice-name", help="Selecciona una voz ya registrada por voice_name.")
     parser.add_argument("--text", help="Genera un clip directo sin leer jobs.")
     parser.add_argument("--output", help="Ruta de salida cuando se usa --text.")
     parser.add_argument("--preset", default=DEFAULT_VOICE_PRESET, help="Preset por defecto.")
@@ -681,6 +720,7 @@ def main() -> None:
                     default_seed=args.seed,
                     language=args.language,
                     explicit_voice_id=args.voice_id,
+                    explicit_voice_name=args.voice_name,
                 )
             except Exception as exc:
                 job_paths = ensure_job_structure(build_job_paths(job_id, get_runtime_paths()))

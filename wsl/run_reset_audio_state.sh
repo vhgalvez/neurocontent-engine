@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wsl\run_generate_audio_from_prompt.sh
+# wsl\run_reset_audio_state.sh
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,18 +22,28 @@ cd "$PROJECT_DIR"
 load_env_file "$DOTENV_FILE"
 load_env_file "$VOICE_ENV_FILE"
 
-export QWEN_TTS_MODEL_PATH="${QWEN_TTS_MODEL_PATH:-/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign}"
-export QWEN_TTS_BASE_MODEL_PATH="${QWEN_TTS_BASE_MODEL_PATH:-/mnt/d/AI_Models/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-Base}"
-export QWEN_TTS_DEVICE="${QWEN_TTS_DEVICE:-auto}"
 export VIDEO_DATASET_ROOT="${VIDEO_DATASET_ROOT:-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset}"
 export VIDEO_JOBS_ROOT="${VIDEO_JOBS_ROOT:-$VIDEO_DATASET_ROOT/jobs}"
 export PYTHONUNBUFFERED=1
 
+HAS_CONFIRM=false
+HAS_DRY_RUN=false
+for arg in "$@"; do
+    if [ "$arg" = "--confirm" ]; then
+        HAS_CONFIRM=true
+    fi
+    if [ "$arg" = "--dry-run" ]; then
+        HAS_DRY_RUN=true
+    fi
+done
+
+if [ "$HAS_CONFIRM" = false ] && [ "$HAS_DRY_RUN" = false ]; then
+    echo "ERROR: este reset requiere --confirm. Usa --dry-run para inspeccionar sin cambios." >&2
+    exit 1
+fi
+
 echo "Proyecto: $PROJECT_DIR"
 echo "Python usado: $QWEN_PYTHON"
-echo "Modelo VoiceDesign disponible: $QWEN_TTS_MODEL_PATH"
-echo "Modelo Base disponible: $QWEN_TTS_BASE_MODEL_PATH"
-echo "Device: $QWEN_TTS_DEVICE"
 echo "Dataset root: $VIDEO_DATASET_ROOT"
 echo "Jobs root: $VIDEO_JOBS_ROOT"
 
@@ -43,7 +53,7 @@ if [ ! -x "$QWEN_PYTHON" ]; then
 fi
 
 set +e
-"$QWEN_PYTHON" -u "$PROJECT_DIR/wsl/generate_audio_from_prompt.py" "$@"
+"$QWEN_PYTHON" -u "$PROJECT_DIR/wsl/reset_audio_state.py" "$@"
 EXIT_CODE=$?
 set -e
 

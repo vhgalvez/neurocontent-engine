@@ -265,14 +265,15 @@ Ejemplo multi target:
 
 ## Voz: arquitectura nueva
 
-La identidad vocal ahora se trata como un recurso registrable y trazable.
+La identidad vocal ya no se trata como un preset global implícito. Ahora existe un registry persistente y una resolución explícita de estrategia de runtime.
 
-Cada voz tiene:
+### Qué guarda una voz registrada
+
+Cada voz persistida puede incluir:
 
 - `voice_id`
 - `scope`
-- `job_id` si aplica
-- `voice_mode`
+- `job_id`
 - `voice_name`
 - `voice_description`
 - `model_name`
@@ -282,9 +283,12 @@ Cada voz tiene:
 - `reference_file`
 - `reference_text_file`
 - `voice_clone_prompt_path`
+- `voice_preset`
+- `voice_mode`
 - `tts_strategy_default`
 - `supports_reference_conditioning`
 - `supports_clone_prompt`
+- `engine`
 - `status`
 - `notes`
 - `created_at`
@@ -292,217 +296,190 @@ Cada voz tiene:
 
 ### `voice_id` vs `voice_name`
 
-- `voice_id`: identificador tecnico persistente del sistema. Ejemplo: `voice_global_0001`.
-- `voice_name`: nombre logico humano de la voz. Ejemplo: `marca_personal_es`.
-- `voice_name` debe ser unico dentro del registry.
-- `voice_name` no puede parecer un `voice_id` interno como `voice_global_0001` o `voice_job_000001_0001`.
-- si intentas crear una voz con un `voice_name` ya usado, el alta aborta con error explicito.
+El sistema separa de forma estricta el identificador técnico del alias humano:
 
-## Semántica de voz y síntesis
+- `voice_id`: identificador persistente generado por el sistema. Ejemplo: `voice_global_0001`.
+- `voice_name`: alias lógico legible por humanos. Ejemplo: `marca_personal_es`.
 
-El sistema separa dos conceptos:
+Reglas de integridad:
 
-- identidad vocal registrada
-- estrategia real de síntesis usada al generar audio
+- `voice_name` debe ser único en todo el registry.
+- `voice_name` no puede parecer un ID interno como `voice_global_0001` o `voice_job_000001_0001`.
+- si el nombre ya existe, la creación aborta con `ERROR: ya existe una voz con ese nombre`.
 
-### `voice_mode`
+### Registry como fuente de verdad
 
-- `design_only`: la voz se reutiliza como descripción persistente, seed y preset. `reference.wav` queda como referencia trazable, no como garantía de condicionamiento acústico directo.
-- `reference_conditioned`: la voz espera reutilizar `reference.wav` y, si existe, `reference.txt` o `reference_text_file`.
-- `clone_prompt`: la voz espera reutilizar `voice_clone_prompt_path`.
-
-### `tts_strategy_default`
-
-Expresa la estrategia pedida por defecto para esa voz:
-
-- `description_seed_preset`
-- `reference_conditioned`
-- `clone_prompt`
-- `legacy_preset_fallback`
-
-### Regla importante de UX
-
-`VIDEO_DEFAULT_VOICE_ID` solo selecciona qué voz registrada usar. No obliga por sí mismo a que el motor consuma `reference.wav`. La estrategia real depende de `voice_mode`, `tts_strategy_default` y de la capacidad del flujo de síntesis disponible.
-
-Si el flujo no puede usar la estrategia pedida, el sistema ahora:
-
-- registra la estrategia pedida
-- registra la estrategia realmente usada
-- marca si hubo fallback
-- guarda la razón del fallback en `job.json`, `status.json` y logs
-
-### Scopes soportados
-
-`global`
-
-- una voz reutilizable entre jobs
-- ejemplo: `voice_global_0001`
-
-`job`
-
-- una voz específica para un job
-- ejemplo: `voice_job_000001_0001`
-
-## Precedencia real de voz
-
-El código resuelve la voz en este orden:
-
-1. `--voice-id` explícito
-2. voz ya asignada en `jobs/<job_id>/job.json`
-3. `VIDEO_DEFAULT_VOICE_ID` como voz global por defecto
-4. fallback de compatibilidad:
-   en VoiceDesign se auto-registra una voz `job` desde preset/seed legacy si no existe ninguna asignación previa
-
-Ese origen queda registrado como `voice_source` y también como `voice_selection_mode`.
-
-## Registry de voces
-
-Ubicación principal:
+La fuente de verdad del sistema de voces es:
 
 - `video-dataset/voices/voices_index.json`
 - `video-dataset/voices/<voice_id>/voice.json`
 
-`job.json` guarda qué voz quedó asignada al job:
+`job.json` y `status.json` no reemplazan el registry. Lo que hacen es dejar trazabilidad de qué voz se seleccionó y qué estrategia terminó usándose en cada síntesis.
 
-```json
-{
-  "voice": {
-    "voice_id": "voice_global_0001",
-    "scope": "global",
-    "voice_mode": "design_only",
-    "tts_strategy_default": "description_seed_preset",
-    "selection_mode": "manual",
-    "voice_name": "marca_personal_es",
-    "voice_description": "Voz principal estable para la marca.",
-    "model_name": "/mnt/d/.../Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-    "language": "Spanish",
-    "seed": 424242,
-    "reference_file": "/mnt/c/.../video-dataset/voices/voice_global_0001/reference.wav"
-  }
-}
-```
+## Semántica de voz y estrategia de runtime
 
-`status.json` replica los campos clave de trazabilidad para ver rápidamente qué voz se usó sin abrir todo el registry.
-También guarda:
+El cambio de diseño importante es este: una voz persistida no se resuelve solo por existir, sino por su tipo operativo.
 
-- `voice_source`
-- `audio_file`
-- `audio_generated_at`
+### Tipos de voz soportados
+
+- `design_only`: voz persistida para VoiceDesign. Debe reutilizar `voice_instruct`, `language`, `seed` y `voice_preset` solo si ese preset está en el propio registro.
+- `reference_conditioned`: voz persistida para runtime Base a partir de `reference.wav` y opcionalmente `reference.txt`.
+- `clone_prompt`: voz persistida para runtime Base a partir de `voice_clone_prompt_path`.
+- `clone_ready`: marcador operativo compatible con ambos casos Base. El runtime deriva si debe usar prompt o referencia según los artefactos realmente disponibles.
+
+### Estrategias derivadas por el runtime
+
+La estrategia efectiva ya no se decide por intuición del wrapper. Se deriva desde el registry:
+
+- `voice_design_from_registry`
+- `base_clone_from_reference`
+- `base_clone_from_prompt`
+- `legacy_preset_fallback`
+
+Regla crítica:
+
+- una voz `design_only` persistida no debe caer en un preset global por defecto
+- `QWEN_TTS_VOICE_PRESET` solo debe actuar como fallback legacy cuando no existe una identidad persistida resoluble o cuando una voz legacy fue registrada explícitamente con esa semántica
+
+Esto evita el fallo operativo más peligroso detectado: que una voz masculina persistida termine sonando femenina porque el runtime acabó aplicando `mujer_podcast_seria_35_45` como preset efectivo.
+
+### Política final de resolución de voz
+
+La selección de voz quedó centralizada. La precedencia es:
+
+1. `--voice-id`
+2. `--voice-name`
+3. voz ya asignada en `job.json`
+4. `VIDEO_DEFAULT_VOICE_ID`
+5. fallback legacy solo si no existe una voz persistida resoluble
+
+Ese origen queda trazado como `voice_source` y `voice_selection_mode`.
+
+### Política final de runtime por tipo de voz
+
+Una vez seleccionada la voz, el runtime deriva la estrategia operativa:
+
+- `design_only` -> `voice_design_from_registry` -> runtime `VoiceDesign`
+- `clone_prompt` o `clone_ready` con prompt persistido -> `base_clone_from_prompt` -> runtime `Base`
+- `reference_conditioned` o `clone_ready` con referencia persistida -> `base_clone_from_reference` -> runtime `Base`
+- `legacy_preset_fallback` -> `VoiceDesign` con preset/seed global solo como compatibilidad controlada
+
+Si una voz existe pero su metadata no permite construir una estrategia válida, el sistema falla con error explícito. Ya no debe degradarse silenciosamente a un preset global engañoso.
+
+## Scripts principales del sistema de audio y voces
+
+### `bash wsl/run_design_voice.sh`
+
+Diseña una voz nueva con VoiceDesign, genera `reference.wav`, registra la voz y opcionalmente la asigna a un job.
+
+Salida típica:
+
+- carpeta `video-dataset/voices/<voice_id>/`
+- `voice.json`
+- `reference.wav`
+- `reference.txt`
+- actualización de `voices_index.json`
+
+### `bash wsl/run_audio.sh`
+
+Es el flujo batch por jobs. Lee el texto del job, resuelve la voz según la política central y sintetiza con el runtime correcto.
+
+Debe hacer esto:
+
+- si la voz seleccionada es `design_only`, usar VoiceDesign desde el registry
+- si la voz seleccionada es `clone_ready`, `clone_prompt` o `reference_conditioned`, usar Base
+- si no hay voz persistida, permitir el fallback legacy controlado
+
+### `bash wsl/run_generate_audio_from_prompt.sh`
+
+Es el flujo puntual. Ya no debe entenderse como un flujo exclusivamente clone/reference.
+
+Ahora soporta:
+
+- reutilizar una voz persistida `design_only` por `--voice-id` o `--voice-name`
+- reutilizar una voz clone/reference persistida por `--voice-id` o `--voice-name`
+- registrar una voz nueva desde `--reference-wav` cuando no existe una voz previa resoluble
+
+### `bash wsl/run_delete_voice.sh`
+
+Ejecuta el borrado consistente de una voz persistida. No debe sustituirse por borrado manual de carpetas.
+
+### `bash wsl/reset_system.sh`
+
+Resetea el estado operativo de jobs, voces y outputs derivados. Es el flujo seguro para limpieza total del sistema durante pruebas o reinicios controlados.
+
+## Trazabilidad de síntesis
+
+El sistema registra al menos estos conceptos:
+
+- `voice_id`
+- `voice_name`
 - `voice_mode`
 - `tts_strategy_requested`
 - `tts_strategy_used`
 - `tts_fallback_used`
 - `tts_fallback_reason`
+- `audio_generated_at`
 
-## Flujos vocales soportados
-
-### Flujo 1: voz global estable
-
-1. crear una voz global una sola vez
-2. registrar esa voz con `voice_global_0001`
-3. asignarla a jobs por `voice_id`
-4. reutilizar siempre la misma identidad
-
-Ejemplo:
-
-```bash
-bash wsl/run_design_voice.sh --scope global --voice-name marca_personal_es --assign-to-job false
-```
-
-Después puedes usarla en un job:
-
-```bash
-bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
-```
-
-O dejarla como default global:
-
-```bash
-export VIDEO_DEFAULT_VOICE_ID="voice_global_0001"
-bash wsl/run_audio.sh --job-id 000001
-```
-
-### Flujo 2: voz individual por job
-
-1. crear o auto-registrar una voz de job
-2. guardarla como `voice_job_<job_id>_<nnnn>`
-3. asignarla al `job.json`
-4. reutilizarla siempre dentro de ese job
-
-Ejemplo explícito:
-
-```bash
-bash wsl/run_design_voice.sh --scope job --job-id 000001 --voice-name campaña_a --assign-to-job
-```
-
-Ejemplo por compatibilidad:
-
-- si el job no tiene voz asignada y lanzas `run_audio.sh`
-- el sistema puede auto-registrar una voz `job` desde el preset/seed actual
-- la asignación queda persistida en `job.json`
-
-### Flujo 3: selección manual de voz existente
-
-1. localizar un `voice_id` del registry
-2. pasarlo por CLI
-3. el job queda ligado a esa voz
-
-Ejemplo:
-
-```bash
-bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
-```
-
-## Logs y trazabilidad de síntesis
-
-El log de audio ya no resume todo como un simple `preset=...` cuando se resolvió una voz registrada. Ahora distingue:
-
-- `voice_id` resuelto
-- `voice_mode`
-- estrategia pedida
-- estrategia usada
-- fallback y motivo si aplica
-
-Ejemplo sin fallback:
+Ejemplo correcto de una voz `design_only` reutilizada sin contaminación de preset global:
 
 ```text
 [000001] Voice resolved: voice_global_0001 mode=design_only
 [000001] Requested strategy: description_seed_preset
-[000001] Preset used: mujer_podcast_seria_35_45 (source=global_default)
-[000001] Strategy used: description_seed_preset
-[000001] Audio generado en ... con voice_id=voice_global_0001, voice_mode=design_only, strategy=description_seed_preset
+[000001] Strategy used: voice_design_from_registry
 ```
 
-Ejemplo con fallback:
+Ejemplo correcto de una voz clone/reference:
 
 ```text
-[000001] Voice resolved: voice_global_0001 mode=reference_conditioned
+[000001] Voice resolved: voice_global_0002 mode=clone_ready
 [000001] Requested strategy: reference_conditioned
-[000001] Fallback strategy used: description_seed_preset
-[000001] Fallback reason: Current synthesis path could not consume reference conditioning directly: ...
+[000001] Strategy used: reference_conditioned
 ```
 
-## Cómo reproducir exactamente una voz
+Ejemplo de fallback legacy permitido:
 
-Para reproducibilidad necesitas revisar:
+```text
+[000001] Voice resolved: voice_job_000001_0001 mode=design_only
+[000001] Requested strategy: legacy_preset_fallback
+[000001] Preset used: mujer_podcast_seria_35_45 (source=global_default)
+[000001] Strategy used: legacy_preset_fallback
+```
 
-1. `jobs/<job_id>/job.json`
-2. `jobs/<job_id>/status.json`
-3. `voices/<voice_id>/voice.json`
+## Borrado y reset del sistema
 
-Campos críticos:
+### Borrado correcto de una voz
 
-- `voice_id`
-- `scope`
-- `model_name`
-- `seed`
-- `voice_instruct`
-- `reference_file`
-- `voice_clone_prompt_path`
-- `selection_mode`
-- `voice_source`
-- `audio_file`
-- `audio_generated_at`
+No debe borrarse manualmente una carpeta dentro de `video-dataset/voices/`. El flujo correcto es:
+
+```bash
+bash wsl/run_delete_voice.sh --voice-id voice_global_0001
+```
+
+Ese flujo:
+
+- valida que la voz exista
+- valida carpeta física y `voice.json`
+- bloquea el borrado si la voz sigue referenciada en jobs
+- actualiza `voices_index.json`
+- hace rollback si algo falla
+
+### Reset total del sistema
+
+Para una limpieza completa y reproducible:
+
+```bash
+bash wsl/reset_system.sh
+```
+
+Comportamiento:
+
+- limpia `VIDEO_JOBS_ROOT`
+- limpia `video-dataset/voices/`
+- reinicializa `voices_index.json` vacío
+- limpia `outputs/` salvo que se use `--keep-outputs`
+
+Este flujo existe para evitar que el estado de pruebas dependa de borrados manuales parciales.
 
 ## Ejecución
 
@@ -624,24 +601,32 @@ bash wsl/run_design_voice.sh \
   --assign-to-job
 ```
 
-### Audio por clone prompt
+### Audio batch con selección explícita por nombre
 
 ```bash
 bash wsl/run_generate_audio_from_prompt.sh \
-  --job-id 000001 \
-  --voice-id voice_global_0001 \
-  --overwrite
+  --voice-name marca_personal_es \
+  --text "Esta es una prueba con una voz persistida de tipo design_only."
 ```
 
-O registrando manualmente desde un `reference.wav`:
+### Audio puntual clone/reference desde voz existente
 
 ```bash
 bash wsl/run_generate_audio_from_prompt.sh \
-  --job-id 000001 \
+  --voice-id voice_global_0002 \
+  --text "Esta es una prueba con una voz persistida de tipo clone_ready."
+```
+
+### Registrar una voz nueva desde un `reference.wav`
+
+```bash
+bash wsl/run_generate_audio_from_prompt.sh \
+  --register-voice-name locutor_clone_es \
   --reference-wav /mnt/c/ruta/a/reference.wav \
   --reference-text "Texto exacto del reference.wav" \
+  --text "Texto final sintetizado con la nueva voz."
   --save-prompt \
-  --overwrite
+  --output /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine/outputs/locutor_clone_es.wav
 ```
 
 ### Subtítulos
@@ -663,6 +648,18 @@ Comportamiento:
 - aborta si algun `job.json` sigue referenciando esa voz
 - elimina la carpeta de la voz y su entrada en `voices_index.json`
 - valida el registry final y hace rollback automatico si algo falla durante el proceso
+
+### Resetear jobs, voces y outputs
+
+```bash
+bash wsl/reset_system.sh
+```
+
+Conservando `outputs/`:
+
+```bash
+bash wsl/reset_system.sh --keep-outputs
+```
 
 ## Ejemplo concreto de job `000001`
 

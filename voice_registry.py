@@ -11,7 +11,7 @@ from job_paths import JobPaths, RuntimePaths, first_existing_path
 DEFAULT_GLOBAL_VOICE_ID_ENV = "VIDEO_DEFAULT_VOICE_ID"
 DEFAULT_VOICE_MODE = "design_only"
 DEFAULT_TTS_STRATEGY = "description_seed_preset"
-VOICE_MODES = {"design_only", "reference_conditioned", "clone_prompt"}
+VOICE_MODES = {"design_only", "reference_conditioned", "clone_prompt", "clone_ready"}
 TTS_STRATEGIES = {
     "description_seed_preset",
     "reference_conditioned",
@@ -72,7 +72,9 @@ def resolve_tts_strategy_default(record: dict[str, Any] | None) -> str:
     voice_mode = resolve_voice_mode(payload)
     if voice_mode == "clone_prompt":
         return "clone_prompt"
-    if voice_mode == "reference_conditioned":
+    if voice_mode in {"reference_conditioned", "clone_ready"}:
+        if payload.get("voice_clone_prompt_path"):
+            return "clone_prompt"
         return "reference_conditioned"
     return DEFAULT_TTS_STRATEGY
 
@@ -109,6 +111,12 @@ def load_voice_index(runtime: RuntimePaths) -> dict[str, Any]:
 def save_voice_index(runtime: RuntimePaths, payload: dict[str, Any]) -> None:
     payload["updated_at"] = now_iso()
     safe_write_json(runtime.voices_index_file, payload)
+
+
+def initialize_empty_voice_index(runtime: RuntimePaths) -> dict[str, Any]:
+    payload = {"registry_version": "1.0", "voices": [], "updated_at": ""}
+    save_voice_index(runtime, payload)
+    return load_voice_index(runtime)
 
 
 def _voice_record_path(runtime: RuntimePaths, voice_id: str) -> Path:
@@ -217,6 +225,76 @@ def get_voice(runtime: RuntimePaths, voice_id: str) -> dict[str, Any] | None:
     record_path = _voice_record_path(runtime, voice_id)
     payload = safe_read_json(record_path, default=None)
     return normalize_voice_record(payload) if payload else None
+
+
+def get_voice_by_name(runtime: RuntimePaths, voice_name: str) -> dict[str, Any] | None:
+    record = _find_index_record_by_voice_name(runtime, voice_name)
+    if record is not None:
+        return normalize_voice_record(record)
+    record = _find_disk_record_by_voice_name(runtime, voice_name)
+    return normalize_voice_record(record) if record is not None else None
+
+
+def resolve_voice_runtime_strategy(record: dict[str, Any]) -> dict[str, str]:
+    normalized = normalize_voice_record(record)
+    voice_mode = normalized["voice_mode"]
+    requested = resolve_tts_strategy_default(normalized)
+    has_prompt = bool(str(normalized.get("voice_clone_prompt_path") or "").strip())
+    has_reference = bool(str(normalized.get("reference_file") or "").strip())
+    supports_reference = bool(normalized.get("supports_reference_conditioning"))
+    supports_clone = bool(normalized.get("supports_clone_prompt"))
+
+    if voice_mode == "design_only":
+        strategy = "legacy_preset_fallback" if requested == "legacy_preset_fallback" else "voice_design_from_registry"
+        return {
+            "voice_mode": voice_mode,
+            "tts_strategy_default": requested,
+            "voice_strategy": strategy,
+            "runtime_model": "voice_design",
+        }
+
+    if has_prompt or supports_clone or voice_mode in {"clone_prompt", "clone_ready"}:
+        if has_prompt:
+            return {
+                "voice_mode": voice_mode,
+                "tts_strategy_default": requested,
+                "voice_strategy": "base_clone_from_prompt",
+                "runtime_model": "base",
+            }
+        if has_reference or supports_reference:
+            return {
+                "voice_mode": voice_mode,
+                "tts_strategy_default": requested,
+                "voice_strategy": "base_clone_from_reference",
+                "runtime_model": "base",
+            }
+        raise RuntimeError(
+            "La voz existe, pero esta marcada como clone/reference sin prompt ni referencia reutilizable "
+            f"(voice_id={normalized.get('voice_id', '')}, voice_mode={voice_mode})."
+        )
+
+    if has_reference or supports_reference or voice_mode == "reference_conditioned":
+        return {
+            "voice_mode": voice_mode,
+            "tts_strategy_default": requested,
+            "voice_strategy": "base_clone_from_reference",
+            "runtime_model": "base",
+        }
+
+    if requested in {"description_seed_preset", "legacy_preset_fallback"}:
+        strategy = "legacy_preset_fallback" if requested == "legacy_preset_fallback" else "voice_design_from_registry"
+        return {
+            "voice_mode": voice_mode,
+            "tts_strategy_default": requested,
+            "voice_strategy": strategy,
+            "runtime_model": "voice_design",
+        }
+
+    raise RuntimeError(
+        "La voz existe, pero no se pudo derivar una estrategia operativa valida desde el registry "
+        f"(voice_id={normalized.get('voice_id', '')}, voice_mode={voice_mode}, "
+        f"tts_strategy_default={requested})."
+    )
 
 
 def _next_voice_id(runtime: RuntimePaths, prefix: str) -> str:
@@ -415,6 +493,10 @@ def update_job_audio_synthesis(
     reference_conditioning_used: bool = False,
     clone_prompt_used: bool = False,
     voice_preset_used: str = "",
+    voice_instruct_source: str = "",
+    seed_source: str = "",
+    preset_source: str = "",
+    runtime_source: str = "",
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     document = load_job_document(job_paths)
@@ -431,6 +513,10 @@ def update_job_audio_synthesis(
         "reference_conditioning_used": bool(reference_conditioning_used),
         "clone_prompt_used": bool(clone_prompt_used),
         "voice_preset_used": voice_preset_used,
+        "voice_instruct_source": voice_instruct_source,
+        "seed_source": seed_source,
+        "preset_source": preset_source,
+        "runtime_source": runtime_source,
         "generated_at": generated_at or now_iso(),
     }
     return save_job_document(job_paths, document)
@@ -457,12 +543,19 @@ def resolve_job_voice_assignment(
     job_paths: JobPaths,
     *,
     explicit_voice_id: str | None = None,
+    explicit_voice_name: str | None = None,
 ) -> dict[str, Any] | None:
     if explicit_voice_id:
         record = get_voice(runtime, explicit_voice_id)
         if not record:
             raise RuntimeError(f"No existe voice_id={explicit_voice_id} en el registry.")
-        return {"record": record, "selection_mode": "manual"}
+        return {"record": record, "selection_mode": "manual_voice_id"}
+
+    if explicit_voice_name:
+        record = get_voice_by_name(runtime, explicit_voice_name)
+        if not record:
+            raise RuntimeError(f"No existe voice_name={explicit_voice_name} en el registry.")
+        return {"record": record, "selection_mode": "manual_voice_name"}
 
     job_document = load_job_document(job_paths)
     job_voice = job_document.get("voice") or {}
@@ -484,6 +577,39 @@ def resolve_job_voice_assignment(
             )
         return {"record": record, "selection_mode": "global_default"}
 
+    return None
+
+
+def resolve_voice_selection(
+    runtime: RuntimePaths,
+    *,
+    job_paths: JobPaths | None = None,
+    explicit_voice_id: str | None = None,
+    explicit_voice_name: str | None = None,
+) -> dict[str, Any] | None:
+    if explicit_voice_id:
+        record = get_voice(runtime, explicit_voice_id)
+        if not record:
+            raise RuntimeError(f"No existe voice_id={explicit_voice_id} en el registry.")
+        return {"record": normalize_voice_record(record), "selection_mode": "manual_voice_id"}
+
+    if explicit_voice_name:
+        record = get_voice_by_name(runtime, explicit_voice_name)
+        if not record:
+            raise RuntimeError(f"No existe voice_name={explicit_voice_name} en el registry.")
+        return {"record": normalize_voice_record(record), "selection_mode": "manual_voice_name"}
+
+    if job_paths is not None:
+        return resolve_job_voice_assignment(runtime, job_paths)
+
+    default_global_voice_id = os.getenv(DEFAULT_GLOBAL_VOICE_ID_ENV, "").strip()
+    if default_global_voice_id:
+        record = get_voice(runtime, default_global_voice_id)
+        if not record:
+            raise RuntimeError(
+                f"{DEFAULT_GLOBAL_VOICE_ID_ENV} apunta a una voz inexistente: {default_global_voice_id}"
+            )
+        return {"record": normalize_voice_record(record), "selection_mode": "global_default"}
     return None
 
 

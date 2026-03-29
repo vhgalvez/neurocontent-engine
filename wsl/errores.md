@@ -102,6 +102,7 @@ Wrappers relevantes:
 - `wsl/run_audio.sh`
 - `wsl/run_generate_audio_from_prompt.sh`
 - `wsl/run_delete_voice.sh`
+- `wsl/reset_system.sh`
 
 ### Por qué antes fallaba
 
@@ -230,6 +231,7 @@ Qué hacer:
 
 - dejar de borrar carpetas manualmente
 - usar el flujo oficial de borrado
+- usar `bash wsl/reset_system.sh` si necesitas una limpieza total controlada
 - revisar `voice_registry.py`
 - revisar `wsl/VOICE_SYSTEM_GUIDE.md`
 
@@ -261,6 +263,44 @@ ERROR: voice_name no puede parecer un voice_id interno del sistema
 Significado:
 
 `voice_name` es un alias lógico, no un identificador técnico. Nombres como `voice_global_0001` o `voice_job_000001_0001` son peligrosos porque se confunden con `voice_id`.
+
+### 8. Voz persistida resuelta pero sonido incorrecto por preset global
+
+Síntoma histórico:
+
+```text
+Voice resolved: voice_global_0001 mode=design_only
+Requested strategy: description_seed_preset
+Preset used: mujer_podcast_seria_35_45 (source=global_default)
+```
+
+Ese comportamiento era incorrecto cuando la voz ya era una identidad persistida `design_only`. La corrección final del sistema deja esta regla:
+
+- una voz `design_only` persistida debe sintetizarse con VoiceDesign usando su metadata persistida
+- `QWEN_TTS_VOICE_PRESET` no debe redefinir esa identidad
+
+Qué hacer si vuelves a ver un caso parecido:
+
+- revisar que la voz esté bien registrada en `voices_index.json` y `voice.json`
+- revisar `voice_mode` y `tts_strategy_default`
+- revisar `job.json` y `status.json`
+- revisar que el runtime esté entrando por la estrategia derivada desde `voice_registry.py`
+
+### 9. Error al borrar o necesidad de limpieza total
+
+Si el sistema está muy contaminado por pruebas manuales, no conviene seguir borrando carpetas a mano.
+
+Usa:
+
+```bash
+bash wsl/reset_system.sh
+```
+
+Eso limpia jobs, voces y el índice global de forma coherente. Si quieres conservar `outputs/`, usa:
+
+```bash
+bash wsl/reset_system.sh --keep-outputs
+```
 
 ## D. Qué hacer y qué NO hacer
 
@@ -294,6 +334,7 @@ Después:
 - diseñar voz con `bash wsl/run_design_voice.sh ...`
 - generar audio con `bash wsl/run_audio.sh ...`
 - borrar voz solo con `bash wsl/run_delete_voice.sh --voice-id <id>`
+- resetear el estado solo con `bash wsl/reset_system.sh`
 
 ## F. Observaciones históricas útiles
 

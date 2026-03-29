@@ -31,6 +31,12 @@ El sistema de voces ya no debe entenderse como una colección informal de preset
 
 La idea práctica es simple: hoy el audio funciona correctamente cuando se respeta el entorno validado de WSL2, se usan los wrappers oficiales y se trata el registry de voces como una fuente de verdad que no debe manipularse manualmente.
 
+Además, el comportamiento correcto ya distingue tres escenarios operativos:
+
+- una voz persistida `design_only` debe resolverse por VoiceDesign desde el registry
+- una voz persistida clone/reference debe resolverse por el runtime Base
+- el preset global `QWEN_TTS_VOICE_PRESET` solo debe actuar como fallback legacy y no como identidad de una voz persistida
+
 ## Entorno WSL2 verificado
 
 El entorno funcional validado para Qwen3-TTS en WSL2 es:
@@ -94,13 +100,20 @@ Generar audio para un job:
 bash wsl/run_audio.sh --job-id 000001 --overwrite
 ```
 
+Generar audio para una voz persistida `design_only`:
+
+```bash
+bash wsl/run_generate_audio_from_prompt.sh \
+  --voice-name marca_personal_es \
+  --text "Esta es una prueba usando una voz persistida de tipo design_only."
+```
+
 Generar audio clone/reference:
 
 ```bash
 bash wsl/run_generate_audio_from_prompt.sh \
-  --job-id 000001 \
-  --voice-id voice_global_0001 \
-  --overwrite
+  --voice-id voice_global_0002 \
+  --text "Esta es una prueba usando una voz clone/reference."
 ```
 
 Borrar una voz correctamente:
@@ -109,12 +122,19 @@ Borrar una voz correctamente:
 bash wsl/run_delete_voice.sh --voice-id voice_global_0001
 ```
 
+Reset total del sistema:
+
+```bash
+bash wsl/reset_system.sh
+```
+
 ## Reglas operativas importantes
 
 - No borres carpetas manualmente dentro de `video-dataset/voices/`.
 - No reutilices `voice_name` ya existentes.
 - No uses `voice_name` con forma de `voice_id` interno.
 - No asumas que `reference.wav` implica siempre conditioning acústico directo; eso depende de `voice_mode` y de la estrategia real de síntesis.
+- No asumas que `QWEN_TTS_VOICE_PRESET` define la identidad de una voz persistida. Ese preset es solo fallback legacy.
 - No mezcles el entorno conda actual con `venv` antiguos.
 
 ## Dónde mirar según el problema
