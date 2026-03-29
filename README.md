@@ -8,6 +8,30 @@ El contrato editorial ahora soporta targets de render explícitos:
 - `horizontal`
 - `vertical|horizontal`
 
+## Estado operativo y mapa documental
+
+La documentación del proyecto se ha auditado y reorganizado para reflejar el estado real del sistema después de las correcciones recientes en:
+
+- entorno funcional de Qwen3-TTS sobre WSL2
+- wrappers Bash que usan `QWEN_PYTHON`
+- registro de voces y unicidad de `voice_name`
+- borrado consistente de voces
+- validación fuerte de `voices_index.json`
+
+Punto de entrada recomendado para entender el sistema:
+
+- este `README.md`: visión general del repositorio, estructura de jobs y flujo operativo principal
+- `wsl/VOICE_SYSTEM_GUIDE.md`: guía técnica extensa del sistema de voces, registry, validaciones y borrado
+- `wsl/errores.md`: troubleshooting operativo y estado verificado del entorno Qwen3-TTS en WSL2
+- `wsl/AUDIO_GUIDE.md`: guía corta de arranque, comandos reales y navegación documental
+
+Si estás trabajando en audio y voces, la lectura recomendada es:
+
+1. `README.md`
+2. `wsl/VOICE_SYSTEM_GUIDE.md`
+3. `wsl/errores.md`
+4. `wsl/AUDIO_GUIDE.md`
+
 ## Dataset y resolución de rutas
 
 Resolución de prioridad:
@@ -475,13 +499,59 @@ Campos críticos:
 
 ### Entorno WSL2 para Qwen3-TTS
 
-El entorno operativo válido para audio con Qwen3-TTS en WSL2 es:
+El entorno operativo válido para audio con Qwen3-TTS en WSL2 es el entorno conda `qwen_gpu`. Ese entorno ya fue verificado con GPU real y es el único que debe considerarse válido como base operativa para los wrappers de audio y de diseño de voz.
 
-- `conda activate qwen_gpu`
-- Python: `/home/victory/miniconda3/envs/qwen_gpu/bin/python`
-- fallback por defecto en los wrappers: `QWEN_PYTHON="${QWEN_PYTHON:-/home/victory/miniconda3/envs/qwen_gpu/bin/python}"`
-- si `QWEN_PYTHON` ya viene exportado externamente, se respeta
-- no usar más `/home/victory/Qwen3-TTS/venv/bin/python`
+Entorno funcional verificado:
+
+- activación: `conda activate qwen_gpu`
+- Python válido: `/home/victory/miniconda3/envs/qwen_gpu/bin/python`
+- sistema: Windows + WSL2
+- distro validada: Ubuntu 24.04 LTS
+- GPU validada: NVIDIA GeForce RTX 4070
+- Python: `3.12`
+- `torch==2.5.1`
+- `torchvision==0.20.1`
+- `torchaudio==2.5.1`
+- CUDA operativa en WSL2
+- `qwen_tts` importando correctamente
+- `run_design_voice.sh` generando `reference.wav` correctamente
+
+El `venv` antiguo:
+
+```bash
+/home/victory/Qwen3-TTS/venv/bin/python
+```
+
+ya no debe usarse.
+
+El fallback correcto en los wrappers WSL es:
+
+```bash
+export QWEN_PYTHON="${QWEN_PYTHON:-/home/victory/miniconda3/envs/qwen_gpu/bin/python}"
+```
+
+Esto mantiene dos propiedades importantes:
+
+- si `QWEN_PYTHON` no viene definido, el sistema usa por defecto el Python bueno del entorno `qwen_gpu`
+- si `QWEN_PYTHON` ya viene exportado externamente, el wrapper no lo pisa y mantiene compatibilidad con override manual
+
+Comandos de verificación rápida:
+
+```bash
+conda activate qwen_gpu
+which python
+python -V
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+python -c "import qwen_tts; print('qwen_tts OK')"
+```
+
+Resultado esperado:
+
+- el `python` debe resolver al entorno `qwen_gpu`
+- `Python 3.12`
+- `torch 2.5.1`
+- `True` para CUDA
+- `qwen_tts OK`
 
 ### Editorial
 
@@ -661,6 +731,44 @@ Recomendación de migración:
 - `job.json` es el contrato estable del job.
 - `voice_registry.py` separa identidad vocal, asignación a job y persistencia del registry.
 - La consistencia vocal ya depende de una identidad persistida, no solo de un preset o texto suelto.
+
+## Troubleshooting resumido
+
+Problemas típicos y causa probable:
+
+- `ERROR: no existe Python ejecutable en ...`
+  Suele indicar que `QWEN_PYTHON` apunta al `venv` antiguo o a una ruta inexistente.
+- `QWEN_TTS_DEVICE=cuda pero CUDA no esta disponible`
+  Suele indicar que no estás en el entorno `qwen_gpu` correcto o que la GPU no está expuesta correctamente dentro de WSL2.
+- `ImportError` al importar `torch`, `torchaudio` o `qwen_tts`
+  Suele indicar mezcla de entornos, versiones incompatibles o uso accidental del Python antiguo.
+- `ERROR: ya existe una voz con ese nombre`
+  Indica que `voice_name` ya está registrado y que el alta fue bloqueada para evitar ambigüedad.
+- `voice_name no puede parecer un voice_id interno`
+  Indica que el alias lógico propuesto se parece a un ID técnico reservado del sistema.
+- `ERROR: no se puede eliminar voice_id=... porque sigue referenciada en jobs`
+  Indica que la voz aún está asignada o trazada en algún job y el borrado fue bloqueado de forma segura.
+
+Qué hacer:
+
+```bash
+conda activate qwen_gpu
+which python
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+python -c "import qwen_tts; print('qwen_tts OK')"
+```
+
+Qué no hacer:
+
+- no apuntar manualmente a `/home/victory/Qwen3-TTS/venv/bin/python`
+- no borrar carpetas de voces a mano dentro de `video-dataset/voices/`
+- no forzar `voice_name` con formato parecido a `voice_global_0001`
+- no mezclar entornos de conda y `venv` antiguos
+
+Para troubleshooting detallado y casos históricos:
+
+- consulta `wsl/errores.md`
+- consulta `wsl/VOICE_SYSTEM_GUIDE.md`
 
 
 # VOS SDPA
