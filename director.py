@@ -63,6 +63,9 @@ STATUS_DEFAULTS = {
     "audio_generated": False,
     "subtitles_generated": False,
     "visual_manifest_generated": False,
+    "scene_prompt_pack_generated": False,
+    "scene_prompt_pack_file": "",
+    "scene_prompt_pack_markdown_file": "",
     "export_ready": False,
     "last_step": "created",
     "updated_at": "",
@@ -154,6 +157,12 @@ def safe_write_json(path: Path, data: Dict[str, Any] | List[Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, indent=2)
+
+
+def safe_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file:
+        file.write(content)
 
 
 def safe_read_json(path: Path, default: Any | None = None) -> Any:
@@ -324,6 +333,9 @@ def sync_status_with_files(paths: JobPaths) -> Dict[str, Any]:
         audio_generated=first_existing_path(paths.audio, paths.legacy_audio_candidates).exists(),
         subtitles_generated=first_existing_path(paths.subtitles, paths.legacy_subtitles_candidates).exists(),
         visual_manifest_generated=first_existing_path(paths.manifest, paths.legacy_manifest_candidates).exists(),
+        scene_prompt_pack_generated=paths.scene_prompt_pack.exists() and paths.scene_prompt_pack_markdown.exists(),
+        scene_prompt_pack_file=paths.runtime.to_dataset_relative(paths.scene_prompt_pack) if paths.scene_prompt_pack.exists() else "",
+        scene_prompt_pack_markdown_file=paths.runtime.to_dataset_relative(paths.scene_prompt_pack_markdown) if paths.scene_prompt_pack_markdown.exists() else "",
         voice_id=voice.get("voice_id", ""),
         voice_scope=voice.get("scope", ""),
         voice_source=voice.get("voice_source", voice.get("selection_mode", "")),
@@ -369,6 +381,8 @@ def ensure_job_metadata(paths: JobPaths, brief: Dict[str, Any]) -> Dict[str, Any
                 "brief": runtime.to_dataset_relative(paths.brief),
                 "script": runtime.to_dataset_relative(paths.script),
                 "visual_manifest": runtime.to_dataset_relative(paths.manifest),
+                "scene_prompt_pack": runtime.to_dataset_relative(paths.scene_prompt_pack),
+                "scene_prompt_pack_markdown": runtime.to_dataset_relative(paths.scene_prompt_pack_markdown),
                 "rendered_comfy_workflow": runtime.to_dataset_relative(paths.rendered_workflow),
                 "audio": runtime.to_dataset_relative(paths.audio),
                 "subtitles": runtime.to_dataset_relative(paths.subtitles),
@@ -779,6 +793,340 @@ def _character_design(brief: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_text_fragment(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _csv_style_terms(value: Any) -> List[str]:
+    raw = str(value or "").replace("|", ",")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _join_prompt_parts(parts: List[str]) -> str:
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        cleaned = _normalize_text_fragment(part).strip(" ,")
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(cleaned)
+    return ", ".join(ordered)
+
+
+def _infer_asset_preference(scene_role: str, scene: Dict[str, Any], visual_style: Dict[str, Any]) -> str:
+    role = str(scene_role or "").strip().lower()
+    transition = str(scene.get("transition", "")).lower()
+    camera = str(scene.get("camera", "")).lower()
+    rhythm = str(visual_style.get("rhythm", "")).lower()
+
+    if role in {"hook", "cta", "problema"}:
+        return "video"
+    if role.startswith("solucion") and ("motion" in camera or "punch" in camera or "lateral" in camera):
+        return "video"
+    if "smash_cut" in transition or "cold_open" in transition:
+        return "video"
+    if rhythm in {"rapido", "rápido"} and role.startswith("solucion"):
+        return "video"
+    return "image"
+
+
+def _workflow_profile_for_scene(scene_role: str) -> str:
+    role = str(scene_role or "").strip().lower()
+    if role == "hook":
+        return "vertical_hook_qwen"
+    if role == "problema":
+        return "vertical_problem_qwen"
+    if role in {"explicacion", "cierre"} or role.startswith("solucion"):
+        return "vertical_explainer_qwen"
+    if role == "cta":
+        return "vertical_cta_qwen"
+    return "vertical_scene_qwen"
+
+
+def _build_prompt_negative(brief: Dict[str, Any], visual_style: Dict[str, Any]) -> str:
+    forbidden_terms = _csv_style_terms(brief.get("prohibido", "")) + _csv_style_terms(visual_style.get("forbidden", ""))
+    base_terms = [
+        "blurry",
+        "low quality",
+        "pixelated",
+        "bad anatomy",
+        "extra fingers",
+        "deformed hands",
+        "distorted face",
+        "duplicate subject",
+        "cartoon",
+        "3d render",
+        "watermark",
+        "logo",
+        "text artifacts",
+        "caption burn-in",
+        "oversaturated",
+        "cheap motivational aesthetic",
+    ]
+    return _join_prompt_parts(base_terms + forbidden_terms)
+
+
+def _build_continuity_prompt(
+    brief_context: Dict[str, Any],
+    visual_style: Dict[str, Any],
+    character_design: Dict[str, Any],
+) -> str:
+    identity = _normalize_text_fragment(character_design.get("identity_anchor"))
+    audience = _normalize_text_fragment(character_design.get("audience_mirror"))
+    style_notes = _normalize_text_fragment(visual_style.get("visual_notes"))
+    references = _normalize_text_fragment(visual_style.get("references"))
+    tone = _normalize_text_fragment(visual_style.get("tone"))
+    pieces = [
+        f"same core subject: {identity}" if identity else "",
+        f"same audience-coded persona: {audience}" if audience else "",
+        "same facial identity across all scenes",
+        "same age range and wardrobe continuity across the full piece",
+        "same lighting logic and vertical framing language",
+        f"maintain tone: {tone}" if tone else "",
+        f"keep visual direction consistent with: {style_notes}" if style_notes else "",
+        f"respect style references: {references}" if references else "",
+        f"anchor the transformation around: {_normalize_text_fragment(brief_context.get('promised_transformation'))}"
+        if _normalize_text_fragment(brief_context.get("promised_transformation"))
+        else "",
+    ]
+    return _join_prompt_parts(pieces)
+
+
+def _build_action_prompt(scene: Dict[str, Any], asset_preference: str, visual_style: Dict[str, Any]) -> str:
+    if asset_preference != "video":
+        return ""
+
+    role = str(scene.get("scene_role", "")).lower()
+    rhythm = _normalize_text_fragment(visual_style.get("rhythm"))
+    role_to_action = {
+        "hook": "subtle head motion, tense breathing, micro-expression shift, slight camera punch-in energy",
+        "problema": "restless body language, stress gestures, pacing or reactive movement, handheld tension",
+        "explicacion": "measured hand gesture, overlay-friendly beat, controlled presenter motion",
+        "cierre": "steady eye contact, minimal deliberate movement, stronger final hold",
+        "cta": "direct-to-camera gesture, confident invitation, clean end-frame hold",
+    }
+    if role.startswith("solucion"):
+        return _join_prompt_parts([
+            "practical hand movement that demonstrates the step",
+            "small forward motion that signals progress",
+            f"editing rhythm: {rhythm}" if rhythm else "",
+        ])
+    return _join_prompt_parts([
+        role_to_action.get(role, "controlled presenter motion aligned with the narration beat"),
+        f"editing rhythm: {rhythm}" if rhythm else "",
+    ])
+
+
+def _build_prompt_positive(
+    scene: Dict[str, Any],
+    brief: Dict[str, Any],
+    brief_context: Dict[str, Any],
+    visual_style: Dict[str, Any],
+    character_design: Dict[str, Any],
+    asset_preference: str,
+) -> str:
+    keywords = _csv_style_terms(visual_style.get("keywords", ""))
+    positive_parts = [
+        _normalize_text_fragment(character_design.get("identity_anchor")),
+        _normalize_text_fragment(scene.get("visual_intent")),
+        _normalize_text_fragment(scene.get("camera")),
+        _normalize_text_fragment(scene.get("mood")),
+        _normalize_text_fragment(scene.get("text")),
+        _normalize_text_fragment(brief.get("idea_central")),
+        _normalize_text_fragment(brief_context.get("audience")),
+        _normalize_text_fragment(brief_context.get("thesis")),
+        _normalize_text_fragment(visual_style.get("references")),
+        _normalize_text_fragment(visual_style.get("visual_notes")),
+        "vertical 9:16 composition",
+        "cinematic realism",
+        "social-first framing",
+        "high detail skin and wardrobe realism",
+        "clear subject separation",
+        "micro-contrast lighting",
+        "short-form ad-like immediacy" if asset_preference == "video" else "single keyframe clarity",
+    ]
+    return _join_prompt_parts(positive_parts + keywords)
+
+
+def _build_copy_paste_block(
+    prompt_positive: str,
+    prompt_negative: str,
+    action_prompt: str,
+    continuity_prompt: str,
+    workflow_profile: str,
+    asset_preference: str,
+) -> Dict[str, Any]:
+    return {
+        "positive_prompt": prompt_positive,
+        "negative_prompt": prompt_negative,
+        "action_prompt": action_prompt,
+        "continuity_prompt": continuity_prompt,
+        "workflow_profile": workflow_profile,
+        "asset_preference": asset_preference,
+        "seed": 424242,
+    }
+
+
+def build_scene_prompt_pack(
+    brief: Dict[str, Any],
+    script: Dict[str, Any],
+    visual_manifest: Dict[str, Any],
+    job_id: str,
+) -> Dict[str, Any]:
+    brief_context = visual_manifest.get("brief_context") or {}
+    script_context = visual_manifest.get("script_context") or {}
+    visual_style = visual_manifest.get("visual_style") or {}
+    character_design = visual_manifest.get("character_design") or {}
+    scene_plan = visual_manifest.get("scene_plan") or []
+    continuity_prompt = _build_continuity_prompt(brief_context, visual_style, character_design)
+    prompt_negative = _build_prompt_negative(brief, visual_style)
+
+    scenes: List[Dict[str, Any]] = []
+    for scene in scene_plan:
+        asset_preference = _infer_asset_preference(scene.get("scene_role", ""), scene, visual_style)
+        workflow_profile = _workflow_profile_for_scene(scene.get("scene_role", ""))
+        prompt_positive = _build_prompt_positive(
+            scene=scene,
+            brief=brief,
+            brief_context=brief_context,
+            visual_style=visual_style,
+            character_design=character_design,
+            asset_preference=asset_preference,
+        )
+        action_prompt = _build_action_prompt(scene, asset_preference, visual_style)
+        scenes.append(
+            {
+                "scene_id": scene.get("scene_id", ""),
+                "scene_role": scene.get("scene_role", ""),
+                "start_sec": scene.get("start_sec"),
+                "end_sec": scene.get("end_sec"),
+                "text": scene.get("text", ""),
+                "prompt_positive": prompt_positive,
+                "prompt_negative": prompt_negative,
+                "action_prompt": action_prompt,
+                "continuity_prompt": continuity_prompt,
+                "camera": scene.get("camera", ""),
+                "mood": scene.get("mood", ""),
+                "transition": scene.get("transition", ""),
+                "visual_intent": scene.get("visual_intent", ""),
+                "asset_preference": asset_preference,
+                "workflow_profile": workflow_profile,
+                "copy_paste_block": _build_copy_paste_block(
+                    prompt_positive=prompt_positive,
+                    prompt_negative=prompt_negative,
+                    action_prompt=action_prompt,
+                    continuity_prompt=continuity_prompt,
+                    workflow_profile=workflow_profile,
+                    asset_preference=asset_preference,
+                ),
+            }
+        )
+
+    return {
+        "scene_prompt_pack_version": "1.0",
+        "job_id": job_id,
+        "title": visual_manifest.get("title", brief.get("idea_central", "")),
+        "workflow_target": "comfyui_manual_copy_paste",
+        "source_of_truth": {
+            "brief_file": visual_manifest.get("job_files", {}).get("brief", ""),
+            "script_file": visual_manifest.get("job_files", {}).get("script", ""),
+            "visual_manifest_file": visual_manifest.get("job_files", {}).get("visual_manifest", ""),
+        },
+        "editorial_context": {
+            "brief_context": brief_context,
+            "script_context": {
+                "hook": script_context.get("hook", script.get("hook", "")),
+                "problem": script_context.get("problem", script.get("problema", "")),
+                "explanation": script_context.get("explanation", script.get("explicacion", "")),
+                "solution": script_context.get("solution", script.get("solucion", [])),
+                "close": script_context.get("close", script.get("cierre", "")),
+                "cta": script_context.get("cta", script.get("cta", "")),
+            },
+            "visual_style": visual_style,
+            "character_design": character_design,
+        },
+        "scenes": scenes,
+    }
+
+
+def render_scene_prompt_pack_markdown(pack: Dict[str, Any]) -> str:
+    lines = [
+        f"# Scene Prompt Pack {pack.get('job_id', '')}",
+        "",
+        f"TITLE: {pack.get('title', '')}",
+        f"WORKFLOW_TARGET: {pack.get('workflow_target', '')}",
+        "",
+    ]
+
+    for scene in pack.get("scenes", []):
+        lines.extend(
+            [
+                f"SCENE_ID: {scene.get('scene_id', '')}",
+                f"SCENE_ROLE: {scene.get('scene_role', '')}",
+                f"START_SEC: {scene.get('start_sec', '')}",
+                f"END_SEC: {scene.get('end_sec', '')}",
+                f"CAMERA: {scene.get('camera', '')}",
+                f"MOOD: {scene.get('mood', '')}",
+                f"TRANSITION: {scene.get('transition', '')}",
+                f"VISUAL_INTENT: {scene.get('visual_intent', '')}",
+                "",
+                "TEXT:",
+                str(scene.get("text", "")),
+                "",
+                "POSITIVE_PROMPT:",
+                str(scene.get("prompt_positive", "")),
+                "",
+                "NEGATIVE_PROMPT:",
+                str(scene.get("prompt_negative", "")),
+                "",
+                "ACTION_PROMPT:",
+                str(scene.get("action_prompt", "")),
+                "",
+                "CONTINUITY_PROMPT:",
+                str(scene.get("continuity_prompt", "")),
+                "",
+                f"ASSET_PREFERENCE: {scene.get('asset_preference', '')}",
+                f"WORKFLOW_PROFILE: {scene.get('workflow_profile', '')}",
+                "",
+                "COPY_PASTE_BLOCK:",
+                json.dumps(scene.get("copy_paste_block", {}), ensure_ascii=False, indent=2),
+                "",
+                "---",
+                "",
+            ]
+        )
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def generate_scene_prompt_pack(
+    brief: Dict[str, Any],
+    script: Dict[str, Any],
+    visual_manifest: Dict[str, Any],
+    paths: JobPaths,
+) -> Dict[str, Any]:
+    pack = build_scene_prompt_pack(
+        brief=brief,
+        script=script,
+        visual_manifest=visual_manifest,
+        job_id=paths.job_id,
+    )
+    safe_write_json(paths.scene_prompt_pack, pack)
+    safe_write_text(paths.scene_prompt_pack_markdown, render_scene_prompt_pack_markdown(pack))
+    update_status(
+        paths.status,
+        scene_prompt_pack_generated=True,
+        scene_prompt_pack_file=paths.runtime.to_dataset_relative(paths.scene_prompt_pack),
+        scene_prompt_pack_markdown_file=paths.runtime.to_dataset_relative(paths.scene_prompt_pack_markdown),
+        last_step="scene_prompt_pack_generated",
+    )
+    return pack
+
+
 def _scene_transition(index: int, total: int, role: str) -> str:
     if index == 1:
         return "cold_open"
@@ -1029,6 +1377,8 @@ def build_visual_manifest(
             "brief": runtime.to_dataset_relative(paths.brief),
             "script": runtime.to_dataset_relative(paths.script),
             "visual_manifest": runtime.to_dataset_relative(paths.manifest),
+            "scene_prompt_pack": runtime.to_dataset_relative(paths.scene_prompt_pack),
+            "scene_prompt_pack_markdown": runtime.to_dataset_relative(paths.scene_prompt_pack_markdown),
             "rendered_comfy_workflow": runtime.to_dataset_relative(paths.rendered_workflow),
             "audio": runtime.to_dataset_relative(audio_path),
             "subtitles": runtime.to_dataset_relative(subtitles_path),

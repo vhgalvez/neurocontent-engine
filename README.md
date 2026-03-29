@@ -79,6 +79,8 @@ video-dataset/
 │       │   ├── 000001_brief.json
 │       │   ├── 000001_script.json
 │       │   ├── 000001_visual_manifest.json
+│       │   ├── 000001_scene_prompt_pack.json
+│       │   ├── 000001_scene_prompt_pack.md
 │       │   └── 000001_rendered_comfy_workflow.json
 │       ├── audio/
 │       │   └── 000001_narration.wav
@@ -104,6 +106,8 @@ Todos los artefactos nuevos del job usan el mismo `job_id` en el nombre:
 - `jobs/000001/source/000001_brief.json`
 - `jobs/000001/source/000001_script.json`
 - `jobs/000001/source/000001_visual_manifest.json`
+- `jobs/000001/source/000001_scene_prompt_pack.json`
+- `jobs/000001/source/000001_scene_prompt_pack.md`
 - `jobs/000001/source/000001_rendered_comfy_workflow.json`
 - `jobs/000001/audio/000001_narration.wav`
 - `jobs/000001/subtitles/000001_narration.srt`
@@ -149,6 +153,8 @@ Los campos resueltos se propagan a:
 - `jobs/<job_id>/job.json`
 - `jobs/<job_id>/status.json`
 - `jobs/<job_id>/source/<job_id>_visual_manifest.json`
+- `jobs/<job_id>/source/<job_id>_scene_prompt_pack.json`
+- `jobs/<job_id>/source/<job_id>_scene_prompt_pack.md`
 
 ### `index.csv`
 
@@ -216,6 +222,9 @@ Ejemplo multi target:
 - `render_horizontal_requested`
 - `render_vertical_ready`
 - `render_horizontal_ready`
+- `scene_prompt_pack_generated`
+- `scene_prompt_pack_file`
+- `scene_prompt_pack_markdown_file`
 
 Ejemplo:
 
@@ -226,7 +235,10 @@ Ejemplo:
   "render_vertical_requested": true,
   "render_horizontal_requested": true,
   "render_vertical_ready": false,
-  "render_horizontal_ready": false
+  "render_horizontal_ready": false,
+  "scene_prompt_pack_generated": true,
+  "scene_prompt_pack_file": "jobs/000103/source/000103_scene_prompt_pack.json",
+  "scene_prompt_pack_markdown_file": "jobs/000103/source/000103_scene_prompt_pack.md"
 }
 ```
 
@@ -262,6 +274,74 @@ Ejemplo multi target:
   }
 }
 ```
+
+### `scene_prompt_pack.json`
+
+Nueva capa de salida semántica para producción visual manual en ComfyUI. Se construye de forma determinista usando:
+
+- `brief.json`
+- `script.json`
+- `visual_manifest.json`
+- `visual_manifest.scene_plan`
+
+Cada escena queda alineada con `scene_id`, `scene_role`, `start_sec`, `end_sec` y `text`, y añade:
+
+- `prompt_positive`
+- `prompt_negative`
+- `action_prompt`
+- `continuity_prompt`
+- `asset_preference`
+- `workflow_profile`
+- `copy_paste_block`
+
+Objetivo práctico:
+
+- dejar fichas listas para copiar y pegar en un workflow plantilla fijo de ComfyUI
+- evitar una integración técnica temprana con la API de ComfyUI
+- preservar continuidad visual y consistencia editorial entre escenas
+
+Ejemplo mínimo:
+
+```json
+{
+  "job_id": "000001",
+  "workflow_target": "comfyui_manual_copy_paste",
+  "scenes": [
+    {
+      "scene_id": "scene_01",
+      "scene_role": "hook",
+      "asset_preference": "video",
+      "workflow_profile": "vertical_hook_qwen",
+      "prompt_positive": "hombre 25-45 frustrado pero ambicioso, vertical 9:16 composition, cinematic realism",
+      "prompt_negative": "blurry, low quality, bad anatomy, watermark",
+      "action_prompt": "subtle head motion, tense breathing, micro-expression shift, slight camera punch-in energy",
+      "continuity_prompt": "same core subject: hombre 25-45 frustrado pero ambicioso, same facial identity across all scenes",
+      "copy_paste_block": {
+        "positive_prompt": "...",
+        "negative_prompt": "...",
+        "action_prompt": "...",
+        "continuity_prompt": "...",
+        "workflow_profile": "vertical_hook_qwen",
+        "asset_preference": "video",
+        "seed": 424242
+      }
+    }
+  ]
+}
+```
+
+### `scene_prompt_pack.md`
+
+Salida paralela pensada para uso humano rápido. Muestra por escena:
+
+- metadatos temporales
+- prompt positivo
+- prompt negativo
+- action prompt
+- continuity prompt
+- asset preference
+- workflow profile
+- bloque listo para copy/paste
 
 ## Voz: arquitectura nueva
 
@@ -766,6 +846,8 @@ jobs/000001/
 │   ├── 000001_brief.json
 │   ├── 000001_script.json
 │   ├── 000001_visual_manifest.json
+│   ├── 000001_scene_prompt_pack.json
+│   ├── 000001_scene_prompt_pack.md
 │   └── 000001_rendered_comfy_workflow.json
 ├── audio/
 │   └── 000001_narration.wav
@@ -816,6 +898,7 @@ Nuevo comportamiento:
 - la escritura nueva usa `source/`, `audio/`, `subtitles/`, `logs/`
 - el naming nuevo usa `job_id` en todos los artefactos del job
 - la voz ya no queda como texto libre suelto: queda registrada y asignada
+- el pipeline editorial ahora deja un `scene_prompt_pack` listo para producción visual manual
 
 Recomendación de migración:
 

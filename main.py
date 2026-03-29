@@ -14,6 +14,7 @@ from director import (
     build_index_row,
     build_visual_manifest,
     ensure_job_metadata,
+    generate_scene_prompt_pack,
     generate_script,
     get_job_paths,
     pad_job_id,
@@ -218,7 +219,8 @@ def process_brief(brief: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     script = _load_or_generate_script(brief, paths)
-    _load_or_generate_manifest(brief, script, paths)
+    manifest = _load_or_generate_manifest(brief, script, paths)
+    generate_scene_prompt_pack(brief, script, manifest, paths)
 
     status = sync_status_with_files(paths)
     return build_index_row(brief, status, job_id)
@@ -236,6 +238,9 @@ def build_error_index_row(brief: Dict[str, Any], message: str) -> Dict[str, Any]
         brief_created=True,
         script_generated=first_existing_path(paths.script, paths.legacy_script_candidates).exists(),
         visual_manifest_generated=first_existing_path(paths.manifest, paths.legacy_manifest_candidates).exists(),
+        scene_prompt_pack_generated=paths.scene_prompt_pack.exists() and paths.scene_prompt_pack_markdown.exists(),
+        scene_prompt_pack_file=paths.runtime.to_dataset_relative(paths.scene_prompt_pack) if paths.scene_prompt_pack.exists() else "",
+        scene_prompt_pack_markdown_file=paths.runtime.to_dataset_relative(paths.scene_prompt_pack_markdown) if paths.scene_prompt_pack_markdown.exists() else "",
         render_targets=render_config["targets"],
         default_render_target=render_config["default_target"],
         render_vertical_requested="vertical" in render_config["targets"],

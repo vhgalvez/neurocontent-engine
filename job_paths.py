@@ -76,6 +76,8 @@ class JobPaths:
     brief: Path
     script: Path
     manifest: Path
+    scene_prompt_pack: Path
+    scene_prompt_pack_markdown: Path
     rendered_workflow: Path
     audio_dir: Path
     audio: Path
@@ -181,6 +183,8 @@ def build_job_paths(job_id: str, runtime: RuntimePaths) -> JobPaths:
         brief=job_dir / "source" / f"{padded_job_id}_brief.json",
         script=job_dir / "source" / f"{padded_job_id}_script.json",
         manifest=job_dir / "source" / f"{padded_job_id}_visual_manifest.json",
+        scene_prompt_pack=job_dir / "source" / f"{padded_job_id}_scene_prompt_pack.json",
+        scene_prompt_pack_markdown=job_dir / "source" / f"{padded_job_id}_scene_prompt_pack.md",
         rendered_workflow=job_dir / "source" / f"{padded_job_id}_rendered_comfy_workflow.json",
         audio_dir=job_dir / "audio",
         audio=job_dir / "audio" / f"{padded_job_id}_narration.wav",
