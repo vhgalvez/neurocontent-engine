@@ -37,6 +37,13 @@ Además, el comportamiento correcto ya distingue tres escenarios operativos:
 - una voz persistida clone/reference debe resolverse por el runtime Base
 - el preset global `QWEN_TTS_VOICE_PRESET` solo debe actuar como fallback legacy y no como identidad de una voz persistida
 
+Limitación importante:
+
+- `design_only` no es una clonación fuerte
+- reutiliza `voice_instruct` + `seed` en cada clip
+- `reference.wav` queda como trazabilidad y muestra, no como conditioning acústico directo
+- si buscas máxima estabilidad entre clips, debes migrar a `reference_conditioned` o `clone_prompt`
+
 ## Entorno WSL2 verificado
 
 El entorno funcional validado para Qwen3-TTS en WSL2 es:
@@ -142,7 +149,7 @@ bash wsl/run_delete_voice.sh --voice-id voice_global_0001
 Reset total del sistema:
 
 ```bash
-bash wsl/reset_system.sh
+bash wsl/run_reset_audio_state.sh --scope all --confirm
 ```
 
 ## Reglas operativas importantes

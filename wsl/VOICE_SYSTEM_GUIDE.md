@@ -74,7 +74,7 @@ Wrappers relevantes:
 - `wsl/run_audio.sh`
 - `wsl/run_generate_audio_from_prompt.sh`
 - `wsl/run_delete_voice.sh`
-- `wsl/reset_system.sh`
+- `wsl/run_reset_audio_state.sh`
 
 Fallback correcto:
 
@@ -302,6 +302,14 @@ La voz debe sintetizarse mediante VoiceDesign reutilizando la metadata persistid
 
 `reference.wav` puede existir como trazabilidad, pero no debe forzar por sí mismo un flujo clone/reference.
 
+Limitación operativa importante:
+
+- `design_only` no ofrece anclaje acústico fuerte entre clips
+- en cada síntesis el modelo vuelve a interpretar `voice_instruct`, `seed` y el texto concreto del guion
+- `reference.wav` no se reutiliza como conditioning acústico directo
+- por eso puede haber drift perceptivo de timbre, energía, sexo aparente o edad aparente aunque la selección de voz sea correcta
+- si necesitas máxima consistencia entre clips, la ruta correcta es `reference_conditioned` o `clone_prompt` con runtime Base
+
 #### `reference_conditioned`
 
 La voz debe sintetizarse mediante el runtime Base reutilizando:
@@ -423,9 +431,9 @@ Se usa para diseñar y registrar voces nuevas con VoiceDesign. Por defecto gener
 
 Ejecuta el borrado consistente. Debe usarse siempre en lugar de borrar carpetas manualmente.
 
-### 10.5 `reset_system.sh`
+### 10.5 `run_reset_audio_state.sh`
 
-Ejecuta una limpieza total y controlada del estado operativo.
+Ejecuta una limpieza controlada del estado operativo de audio y voces.
 
 ## 11. Validación del índice
 
@@ -483,21 +491,20 @@ Esto es deliberado. La seguridad del registry tiene prioridad sobre la comodidad
 Cuando se necesita un estado limpio de pruebas o desarrollo, el flujo correcto es:
 
 ```bash
-bash wsl/reset_system.sh
+bash wsl/run_reset_audio_state.sh --scope all --confirm
 ```
 
-Ese comando:
+Scopes soportados:
 
-- limpia `VIDEO_JOBS_ROOT`
-- limpia `video-dataset/voices/`
-- reinicializa `voices_index.json`
-- limpia `outputs/` salvo que se use `--keep-outputs`
+- `--scope voices`
+- `--scope generated`
+- `--scope all`
 
-Ejemplo conservando `outputs/`:
+Seguridad:
 
-```bash
-bash wsl/reset_system.sh --keep-outputs
-```
+- exige `--confirm` para aplicar cambios
+- acepta `--dry-run` para inspección sin cambios
+- `wsl/reset_system.sh` queda solo como wrapper deprecated de compatibilidad
 
 El reset existe para evitar limpiezas manuales parciales que dejan estados mezclados.
 
@@ -590,7 +597,15 @@ bash wsl/run_delete_voice.sh --voice-id voice_global_0001
 ### Reset total
 
 ```bash
-bash wsl/reset_system.sh
+bash wsl/run_reset_audio_state.sh --scope all --confirm
+```
+
+### Prompt recomendado para `design_only`
+
+Cuando se use `design_only`, conviene priorizar identidad antes que estilo y reducir negaciones. Un prompt más estable suele parecerse a esto:
+
+```text
+Voz masculina nativa en español de España, adulto de 30 a 45 años. Timbre medio-grave, estable y creíble. Dicción clara, ritmo natural, tono profesional y sobrio. Mantener el mismo sexo aparente, edad aparente y timbre entre clips. Evitar exageración expresiva.
 ```
 
 ## 16. Buenas prácticas

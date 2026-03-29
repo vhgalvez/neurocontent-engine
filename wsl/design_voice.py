@@ -211,6 +211,11 @@ def main() -> None:
 
         log(f"[design_voice] voice_id={record['voice_id']}")
         log("[design_voice] voice_mode=design_only strategy_default=description_seed_preset")
+        log(
+            "[design_voice] Nota: design_only reutiliza voice_instruct + seed en cada clip. "
+            "reference.wav queda como trazabilidad y muestra de referencia, pero no se usa como "
+            "condicionamiento acustico directo en runtime."
+        )
         log(f"[design_voice] Referencia guardada en {reference_wav}")
 
     except Exception as exc:

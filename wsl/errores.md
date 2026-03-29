@@ -102,7 +102,7 @@ Wrappers relevantes:
 - `wsl/run_audio.sh`
 - `wsl/run_generate_audio_from_prompt.sh`
 - `wsl/run_delete_voice.sh`
-- `wsl/reset_system.sh`
+- `wsl/run_reset_audio_state.sh`
 
 ### Por qué antes fallaba
 
@@ -231,7 +231,7 @@ Qué hacer:
 
 - dejar de borrar carpetas manualmente
 - usar el flujo oficial de borrado
-- usar `bash wsl/reset_system.sh` si necesitas una limpieza total controlada
+- usar `bash wsl/run_reset_audio_state.sh --scope all --confirm` si necesitas una limpieza total controlada
 - revisar `voice_registry.py`
 - revisar `wsl/VOICE_SYSTEM_GUIDE.md`
 
@@ -305,6 +305,13 @@ Ese comportamiento era incorrecto cuando la voz ya era una identidad persistida 
 - una voz `design_only` persistida debe sintetizarse con VoiceDesign usando su metadata persistida
 - `QWEN_TTS_VOICE_PRESET` no debe redefinir esa identidad
 
+Si aun percibes drift aunque la selección sea correcta, la causa más probable ya no es el preset global sino la semántica de `design_only`:
+
+- `design_only` vuelve a interpretar `voice_instruct` en cada clip
+- `reference.wav` no se reutiliza como conditioning acústico directo
+- textos distintos pueden empujar prosodia y energía de forma distinta
+- para máxima consistencia entre clips conviene migrar a `reference_conditioned` o `clone_prompt`
+
 Qué hacer si vuelves a ver un caso parecido:
 
 - revisar que la voz esté bien registrada en `voices_index.json` y `voice.json`
@@ -325,13 +332,13 @@ Si el sistema está muy contaminado por pruebas manuales, no conviene seguir bor
 Usa:
 
 ```bash
-bash wsl/reset_system.sh
+bash wsl/run_reset_audio_state.sh --scope all --confirm
 ```
 
 Eso limpia jobs, voces y el índice global de forma coherente. Si quieres conservar `outputs/`, usa:
 
 ```bash
-bash wsl/reset_system.sh --keep-outputs
+bash wsl/run_reset_audio_state.sh --scope all --dry-run
 ```
 
 ## D. Qué hacer y qué NO hacer
@@ -366,7 +373,7 @@ Después:
 - diseñar voz con `bash wsl/run_design_voice.sh ...`
 - generar audio con `bash wsl/run_audio.sh ...`
 - borrar voz solo con `bash wsl/run_delete_voice.sh --voice-id <id>`
-- resetear el estado solo con `bash wsl/reset_system.sh`
+- resetear el estado solo con `bash wsl/run_reset_audio_state.sh --scope all --confirm`
 
 ## F. Observaciones históricas útiles
 

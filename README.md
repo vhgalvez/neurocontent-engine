@@ -341,6 +341,14 @@ Regla crítica:
 - una voz `design_only` persistida no debe caer en un preset global por defecto
 - `QWEN_TTS_VOICE_PRESET` solo debe actuar como fallback legacy cuando no existe una identidad persistida resoluble o cuando una voz legacy fue registrada explícitamente con esa semántica
 
+Limitación importante de `design_only`:
+
+- `design_only` no fija una huella acústica dura entre clips
+- en runtime reutiliza `voice_instruct` + `seed` + texto y vuelve a pedirle al modelo que diseñe la voz en cada síntesis
+- `reference.wav` queda como trazabilidad y muestra de referencia, pero no se reutiliza como conditioning acústico directo
+- por eso puede haber drift de timbre, energía, sexo aparente o edad percibida entre clips aunque la selección de voz sea correcta
+- si necesitas máxima consistencia entre clips, la ruta recomendada es convertir la voz a `reference_conditioned` o `clone_prompt` y sintetizar con el runtime Base
+
 Esto evita el fallo operativo más peligroso detectado: que una voz masculina persistida termine sonando femenina porque el runtime acabó aplicando `mujer_podcast_seria_35_45` como preset efectivo.
 
 ### Política final de resolución de voz
@@ -411,9 +419,21 @@ Ahora soporta:
 
 Ejecuta el borrado consistente de una voz persistida. No debe sustituirse por borrado manual de carpetas.
 
-### `bash wsl/reset_system.sh`
+### `bash wsl/run_reset_audio_state.sh`
 
-Resetea el estado operativo de jobs, voces y outputs derivados. Es el flujo seguro para limpieza total del sistema durante pruebas o reinicios controlados.
+Resetea el estado operativo de audio y voces. Es el flujo seguro para limpieza controlada del sistema durante pruebas o reinicios.
+
+Scopes soportados:
+
+- `--scope voices`
+- `--scope generated`
+- `--scope all`
+
+Seguridad:
+
+- exige `--confirm` para aplicar cambios
+- acepta `--dry-run` para inspección sin cambios
+- `wsl/reset_system.sh` queda solo como wrapper legacy de compatibilidad
 
 ## Trazabilidad de síntesis
 
@@ -442,6 +462,8 @@ Ejemplo correcto de una voz `design_only` reutilizada sin contaminación de pres
 [000001] Runtime model: voice_design
 [000001] Fallback used: false
 [000001] Preset source: not_used
+[000001] Identity consistency mode: soft_prompt_conditioning_only
+[000001] Reference reused in runtime: false
 ```
 
 Ejemplo correcto de una voz clone/reference:
@@ -455,6 +477,7 @@ Ejemplo correcto de una voz clone/reference:
 [000001] Effective runtime strategy: clone_prompt
 [000001] Runtime model: base
 [000001] Fallback used: false
+[000001] Identity consistency mode: prompt_anchored_clone
 ```
 
 Ejemplo de fallback legacy permitido:
@@ -512,15 +535,15 @@ Ese flujo:
 Para una limpieza completa y reproducible:
 
 ```bash
-bash wsl/reset_system.sh
+bash wsl/run_reset_audio_state.sh --scope all --confirm
 ```
 
 Comportamiento:
 
-- limpia `VIDEO_JOBS_ROOT`
-- limpia `video-dataset/voices/`
-- reinicializa `voices_index.json` vacío
-- limpia `outputs/` salvo que se use `--keep-outputs`
+- `--scope voices`: limpia registry, carpetas de voz y trazas de voz en jobs
+- `--scope generated`: limpia audio, subtítulos y logs/metadata derivados de audio
+- `--scope all`: aplica ambos
+- no borra código, modelos, documentación ni fuentes editoriales base
 
 Este flujo existe para evitar que el estado de pruebas dependa de borrados manuales parciales.
 
@@ -638,6 +661,12 @@ bash wsl/run_design_voice.sh \
   --reference-text "Hola, esta es la voz oficial de la marca."
 ```
 
+Prompt recomendado para mayor estabilidad en `design_only`:
+
+```text
+Voz masculina nativa en español de España, adulto de 30 a 45 años. Timbre medio-grave, estable y creíble. Dicción clara, ritmo natural, tono profesional y sobrio. Mantener el mismo sexo aparente, edad aparente y timbre entre clips. Evitar exageración expresiva.
+```
+
 Voz de job:
 
 ```bash
@@ -701,13 +730,13 @@ Comportamiento:
 ### Resetear jobs, voces y outputs
 
 ```bash
-bash wsl/reset_system.sh
+bash wsl/run_reset_audio_state.sh --scope all --confirm
 ```
 
-Conservando `outputs/`:
+Inspección sin cambios:
 
 ```bash
-bash wsl/reset_system.sh --keep-outputs
+bash wsl/run_reset_audio_state.sh --scope all --dry-run
 ```
 
 ## Ejemplo concreto de job `000001`

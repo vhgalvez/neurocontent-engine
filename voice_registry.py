@@ -297,6 +297,65 @@ def resolve_voice_runtime_strategy(record: dict[str, Any]) -> dict[str, str]:
     )
 
 
+def describe_voice_identity_consistency(
+    record: dict[str, Any],
+    runtime_strategy: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    strategy = runtime_strategy or resolve_voice_runtime_strategy(record)
+    effective = str(strategy.get("voice_strategy", "")).strip()
+
+    if effective == "voice_design_from_registry":
+        return {
+            "identity_consistency_mode": "soft_prompt_conditioning_only",
+            "identity_consistency_note": (
+                "Esta voz usa VoiceDesign desde voice_instruct + seed + texto. "
+                "reference.wav se conserva como trazabilidad, pero no se reutiliza como "
+                "condicionamiento acustico en runtime. Puede haber drift de timbre, sexo "
+                "aparente o energia entre clips."
+            ),
+            "reference_runtime_used": False,
+        }
+
+    if effective == "legacy_preset_fallback":
+        return {
+            "identity_consistency_mode": "legacy_soft_prompt_conditioning",
+            "identity_consistency_note": (
+                "El runtime esta usando VoiceDesign por preset/seed legacy. No hay anclaje "
+                "acustico fuerte entre clips y la consistencia de identidad es la mas debil."
+            ),
+            "reference_runtime_used": False,
+        }
+
+    if effective == "base_clone_from_reference":
+        return {
+            "identity_consistency_mode": "reference_anchored_clone",
+            "identity_consistency_note": (
+                "El runtime Base reutiliza reference.wav y reference.txt en sintesis. Esta es "
+                "la ruta con anclaje de identidad mas fuerte disponible en el sistema."
+            ),
+            "reference_runtime_used": True,
+        }
+
+    if effective == "base_clone_from_prompt":
+        return {
+            "identity_consistency_mode": "prompt_anchored_clone",
+            "identity_consistency_note": (
+                "El runtime Base reutiliza voice_clone_prompt persistido. No vuelve a leer "
+                "reference.wav en cada clip, pero mantiene un anclaje acustico mucho mas "
+                "fuerte que design_only."
+            ),
+            "reference_runtime_used": False,
+        }
+
+    return {
+        "identity_consistency_mode": "unknown",
+        "identity_consistency_note": (
+            "No se pudo clasificar la fuerza de anclaje vocal para esta estrategia."
+        ),
+        "reference_runtime_used": False,
+    }
+
+
 def _next_voice_id(runtime: RuntimePaths, prefix: str) -> str:
     suffixes: list[int] = []
     for record in load_voice_index(runtime)["voices"]:

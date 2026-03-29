@@ -20,6 +20,7 @@ from director import update_status  # noqa: E402
 from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
 from voice_registry import (  # noqa: E402
     assign_voice_to_job,
+    describe_voice_identity_consistency,
     get_voice,
     get_voice_by_name,
     normalize_voice_record,
@@ -293,11 +294,15 @@ def synthesize_with_voice_design(model, *, text: str, record: dict, language: st
     )
     if not wavs:
         raise RuntimeError("generate_voice_design() no devolvio audio")
+    consistency = describe_voice_identity_consistency(record)
     trace = {
         "voice_instruct_source": "voice_record.voice_instruct" if record.get("voice_instruct") else "voice_record.voice_description",
         "seed_source": "voice_record.seed" if record.get("seed") is not None else "global_default_seed",
         "preset_source": "voice_record" if record.get("voice_preset") else "not_used",
         "runtime_source": "voice_registry.resolve_voice_runtime_strategy",
+        "identity_consistency_mode": consistency["identity_consistency_mode"],
+        "identity_consistency_note": consistency["identity_consistency_note"],
+        "reference_runtime_used": consistency["reference_runtime_used"],
     }
     return wavs[0], sample_rate, trace
 
@@ -316,8 +321,13 @@ def log_runtime_summary(prefix: str, selection_mode: str, record: dict, *, strat
     log(f"{prefix} Voice instruct source: {trace.get('voice_instruct_source', 'unknown')}")
     log(f"{prefix} Seed source: {trace.get('seed_source', 'unknown')}")
     log(f"{prefix} Preset source: {trace.get('preset_source', 'unknown')}")
+    log(f"{prefix} Identity consistency mode: {trace.get('identity_consistency_mode', 'unknown')}")
+    log(f"{prefix} Reference reused in runtime: {str(bool(trace.get('reference_runtime_used', False))).lower()}")
     if trace.get("voice_preset_used"):
         log(f"{prefix} Preset used: {trace['voice_preset_used']} (source={trace.get('preset_source', 'unknown')})")
+    note = str(trace.get("identity_consistency_note", "") or "").strip()
+    if note:
+        log(f"{prefix} Identity consistency note: {note}")
     if verbose:
         log(f"{prefix} Voice debug record: {json.dumps(record, ensure_ascii=False, sort_keys=True)}")
         log(f"{prefix} Voice debug trace: {json.dumps(trace, ensure_ascii=False, sort_keys=True)}")
@@ -439,6 +449,17 @@ def main() -> None:
                 "runtime_source": "voice_registry.resolve_voice_runtime_strategy",
                 "voice_preset_used": "",
             }
+            trace.update(
+                describe_voice_identity_consistency(
+                    updated_record,
+                    {
+                        "voice_strategy": strategy_used,
+                        "runtime_model": "base",
+                        "voice_mode": updated_record.get("voice_mode", ""),
+                        "tts_strategy_default": strategy_requested,
+                    },
+                )
+            )
             runtime_model = "base"
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -481,6 +502,9 @@ def main() -> None:
                 seed_source=trace.get("seed_source", ""),
                 preset_source=trace.get("preset_source", ""),
                 runtime_source=trace.get("runtime_source", ""),
+                identity_consistency_mode=trace.get("identity_consistency_mode", ""),
+                identity_consistency_note=trace.get("identity_consistency_note", ""),
+                reference_runtime_used=trace.get("reference_runtime_used", False),
                 generated_at=generated_at,
             )
             update_status(

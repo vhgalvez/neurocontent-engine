@@ -21,6 +21,7 @@ from director import update_status  # noqa: E402
 from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
 from voice_registry import (  # noqa: E402
     assign_voice_to_job,
+    describe_voice_identity_consistency,
     load_job_document,
     normalize_voice_record,
     register_voice,
@@ -230,6 +231,9 @@ def build_synthesis_trace(
     preset_source: str = "",
     runtime_source: str = "voice_registry.resolve_voice_runtime_strategy",
     runtime_model: str = "",
+    identity_consistency_mode: str = "",
+    identity_consistency_note: str = "",
+    reference_runtime_used: bool = False,
 ) -> dict[str, Any]:
     return {
         "requested": requested,
@@ -245,6 +249,9 @@ def build_synthesis_trace(
         "preset_source": preset_source,
         "runtime_source": runtime_source,
         "runtime_model": runtime_model,
+        "identity_consistency_mode": identity_consistency_mode,
+        "identity_consistency_note": identity_consistency_note,
+        "reference_runtime_used": bool(reference_runtime_used),
     }
 
 
@@ -343,6 +350,7 @@ def synthesize_voice_design_from_registry(model, text: str, language: str, recor
         instruct=instruct,
         language=record.get("language") or language,
     )
+    consistency = describe_voice_identity_consistency(record)
     return wav, sample_rate, build_synthesis_trace(
         requested=resolve_requested_strategy(record),
         used="voice_design_from_registry",
@@ -355,6 +363,9 @@ def synthesize_voice_design_from_registry(model, text: str, language: str, recor
         seed_source="voice_record.seed" if record.get("seed") is not None else "global_default_seed",
         preset_source="voice_record" if record.get("voice_preset") else "not_used",
         runtime_model="voice_design",
+        identity_consistency_mode=consistency["identity_consistency_mode"],
+        identity_consistency_note=consistency["identity_consistency_note"],
+        reference_runtime_used=consistency["reference_runtime_used"],
     )
 
 
@@ -391,6 +402,15 @@ def synthesize_description_seed_preset(model, text: str, language: str, record: 
     )
     set_global_seed(resolved_seed)
     wav, sample_rate = generate_audio_voice_design(model=model, text=text, instruct=instruct, language=language)
+    consistency = describe_voice_identity_consistency(
+        record,
+        {
+            "voice_strategy": "legacy_preset_fallback",
+            "runtime_model": "voice_design",
+            "voice_mode": record.get("voice_mode", ""),
+            "tts_strategy_default": resolve_requested_strategy(record),
+        },
+    )
     return wav, sample_rate, build_synthesis_trace(
         requested=resolve_requested_strategy(record),
         used="description_seed_preset",
@@ -403,6 +423,9 @@ def synthesize_description_seed_preset(model, text: str, language: str, record: 
         seed_source="voice_record.seed" if record.get("seed") is not None else "global_default_seed",
         preset_source="voice_record" if record.get("voice_preset") else "global_default",
         runtime_model="voice_design",
+        identity_consistency_mode=consistency["identity_consistency_mode"],
+        identity_consistency_note=consistency["identity_consistency_note"],
+        reference_runtime_used=consistency["reference_runtime_used"],
     )
 
 
@@ -411,6 +434,15 @@ def synthesize_reference_conditioned(model, text: str, language: str, record: di
     reference_text = read_text_file(record.get("reference_text_file"))
     prompt_items = build_prompt_from_reference(model, reference_wav, reference_text)
     wav, sample_rate = generate_audio_voice_clone(model=model, text=text, language=language, prompt_items=prompt_items)
+    consistency = describe_voice_identity_consistency(
+        record,
+        {
+            "voice_strategy": "base_clone_from_reference",
+            "runtime_model": "base",
+            "voice_mode": record.get("voice_mode", ""),
+            "tts_strategy_default": resolve_requested_strategy(record),
+        },
+    )
     return wav, sample_rate, build_synthesis_trace(
         requested=resolve_requested_strategy(record),
         used="reference_conditioned",
@@ -423,6 +455,9 @@ def synthesize_reference_conditioned(model, text: str, language: str, record: di
         seed_source="not_used",
         preset_source="not_used",
         runtime_model="base",
+        identity_consistency_mode=consistency["identity_consistency_mode"],
+        identity_consistency_note=consistency["identity_consistency_note"],
+        reference_runtime_used=consistency["reference_runtime_used"],
     )
 
 
@@ -432,6 +467,15 @@ def synthesize_clone_prompt(model, text: str, language: str, record: dict[str, A
         raise RuntimeError(f"No existe voice_clone_prompt_path: {prompt_path}")
     prompt_items = load_prompt_json(prompt_path)
     wav, sample_rate = generate_audio_voice_clone(model=model, text=text, language=language, prompt_items=prompt_items)
+    consistency = describe_voice_identity_consistency(
+        record,
+        {
+            "voice_strategy": "base_clone_from_prompt",
+            "runtime_model": "base",
+            "voice_mode": record.get("voice_mode", ""),
+            "tts_strategy_default": resolve_requested_strategy(record),
+        },
+    )
     return wav, sample_rate, build_synthesis_trace(
         requested=resolve_requested_strategy(record),
         used="clone_prompt",
@@ -444,6 +488,9 @@ def synthesize_clone_prompt(model, text: str, language: str, record: dict[str, A
         seed_source="not_used",
         preset_source="not_used",
         runtime_model="base",
+        identity_consistency_mode=consistency["identity_consistency_mode"],
+        identity_consistency_note=consistency["identity_consistency_note"],
+        reference_runtime_used=consistency["reference_runtime_used"],
     )
 
 
@@ -465,11 +512,16 @@ def log_strategy_summary(job_id: str, selection_mode: str, record: dict[str, Any
     log(f"[{job_id}] Voice instruct source: {trace.get('voice_instruct_source', 'unknown')}")
     log(f"[{job_id}] Seed source: {trace.get('seed_source', 'unknown')}")
     log(f"[{job_id}] Preset source: {trace.get('preset_source', 'unknown')}")
+    log(f"[{job_id}] Identity consistency mode: {trace.get('identity_consistency_mode', 'unknown')}")
+    log(f"[{job_id}] Reference reused in runtime: {str(bool(trace.get('reference_runtime_used', False))).lower()}")
     if trace.get("voice_preset_used"):
         preset_source = trace.get("preset_source", "unknown")
         log(f"[{job_id}] Preset used: {trace['voice_preset_used']} (source={preset_source})")
     if trace["fallback_used"]:
         log(f"[{job_id}] Fallback reason: {trace['fallback_reason']}")
+    note = str(trace.get("identity_consistency_note", "") or "").strip()
+    if note:
+        log(f"[{job_id}] Identity consistency note: {note}")
     if verbose:
         log(f"[{job_id}] Voice debug record: {json.dumps(record, ensure_ascii=False, sort_keys=True)}")
         log(f"[{job_id}] Voice debug trace: {json.dumps(trace, ensure_ascii=False, sort_keys=True)}")
@@ -490,6 +542,10 @@ def synthesize_audio_for_record(
     effective_strategy = runtime_strategy["voice_strategy"]
 
     if effective_strategy == "voice_design_from_registry":
+        if voice_design_model is None:
+            raise RuntimeError(
+                "La voz existe y requiere VoiceDesign desde el registry, pero el modelo VoiceDesign no esta disponible."
+            )
         return synthesize_voice_design_from_registry(
             voice_design_model,
             text,
@@ -499,6 +555,10 @@ def synthesize_audio_for_record(
         )
 
     if effective_strategy == "legacy_preset_fallback":
+        if voice_design_model is None:
+            raise RuntimeError(
+                "La voz requiere el flujo legacy de VoiceDesign, pero el modelo VoiceDesign no esta disponible."
+            )
         wav, sample_rate, trace = synthesize_description_seed_preset(
             voice_design_model,
             text,
@@ -530,6 +590,30 @@ def synthesize_audio_for_record(
         f"(voice_id={record.get('voice_id', '')}, voice_mode={record.get('voice_mode', '')}, "
         f"tts_strategy_default={requested})."
     )
+
+
+def determine_required_batch_models(
+    *,
+    runtime,
+    job_ids: list[str],
+    explicit_voice_id: str | None,
+    explicit_voice_name: str | None,
+) -> set[str]:
+    required_models: set[str] = set()
+    for job_id in job_ids:
+        job_paths = ensure_job_structure(build_job_paths(job_id, runtime))
+        assigned = resolve_voice_selection(
+            runtime,
+            job_paths=job_paths,
+            explicit_voice_id=explicit_voice_id,
+            explicit_voice_name=explicit_voice_name,
+        )
+        if not assigned:
+            required_models.add("voice_design")
+            continue
+        runtime_strategy = resolve_voice_runtime_strategy(assigned["record"])
+        required_models.add(runtime_strategy["runtime_model"])
+    return required_models
 
 
 def process_job(
@@ -630,6 +714,9 @@ def process_job(
         seed_source=trace.get("seed_source", ""),
         preset_source=trace.get("preset_source", ""),
         runtime_source=trace.get("runtime_source", ""),
+        identity_consistency_mode=trace.get("identity_consistency_mode", ""),
+        identity_consistency_note=trace.get("identity_consistency_note", ""),
+        reference_runtime_used=trace.get("reference_runtime_used", False),
         generated_at=generated_at,
     )
     update_status(
@@ -699,30 +786,24 @@ def main() -> None:
     validate_voice_index(get_runtime_paths())
 
     try:
-        voice_design_model, resolved_voice_design_model_path = load_model(
-            model_path=args.model_path,
-            device_mode=args.device,
-            use_flash_attn=args.use_flash_attn,
-            expected_tts_model_type="voice_design",
-        )
-        try:
-            base_model, _ = load_model(
-                model_path=args.base_model_path,
+        if args.test_short:
+            voice_design_model, _ = load_model(
+                model_path=args.model_path,
                 device_mode=args.device,
                 use_flash_attn=args.use_flash_attn,
-                expected_tts_model_type="base",
+                expected_tts_model_type="voice_design",
             )
-            log(f"[audio] Base model disponible: {args.base_model_path}")
-        except Exception as base_exc:
-            base_model = None
-            log(f"[audio] Base model no disponible para clone/reference flow: {base_exc}")
-
-        if args.test_short:
             output = get_runtime_paths().jobs_root / "test_short.wav"
             run_direct_text(model=voice_design_model, text=args.test_text, output=output, preset=args.preset, seed=args.seed, language=args.language)
             return
 
         if args.text:
+            voice_design_model, _ = load_model(
+                model_path=args.model_path,
+                device_mode=args.device,
+                use_flash_attn=args.use_flash_attn,
+                expected_tts_model_type="voice_design",
+            )
             output = Path(args.output) if args.output else PROJECT_DIR / "outputs" / "voice_design_preview.wav"
             run_direct_text(model=voice_design_model, text=args.text, output=output, preset=args.preset, seed=args.seed, language=args.language)
             return
@@ -731,6 +812,42 @@ def main() -> None:
         if not job_ids:
             log("[audio] No hay jobs para procesar")
             return
+
+        runtime = get_runtime_paths()
+        required_models = determine_required_batch_models(
+            runtime=runtime,
+            job_ids=job_ids,
+            explicit_voice_id=args.voice_id,
+            explicit_voice_name=args.voice_name,
+        )
+        resolved_voice_design_model_path = resolve_model_path(args.model_path)
+        log(
+            "[audio] Model plan: "
+            f"voice_design={'yes' if 'voice_design' in required_models else 'no'}, "
+            f"base={'yes' if 'base' in required_models else 'no'}"
+        )
+        voice_design_model = None
+        if "voice_design" in required_models:
+            voice_design_model, _ = load_model(
+                model_path=args.model_path,
+                device_mode=args.device,
+                use_flash_attn=args.use_flash_attn,
+                expected_tts_model_type="voice_design",
+            )
+            log(f"[audio] VoiceDesign model disponible: {args.model_path}")
+
+        base_model = None
+        if "base" in required_models:
+            try:
+                base_model, _ = load_model(
+                    model_path=args.base_model_path,
+                    device_mode=args.device,
+                    use_flash_attn=args.use_flash_attn,
+                    expected_tts_model_type="base",
+                )
+                log(f"[audio] Base model disponible: {args.base_model_path}")
+            except Exception as base_exc:
+                log(f"[audio] Base model no disponible para clone/reference flow: {base_exc}")
 
         log(f"[audio] Jobs detectados: {job_ids}")
         had_job_errors = False
