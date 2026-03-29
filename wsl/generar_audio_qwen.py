@@ -229,6 +229,7 @@ def build_synthesis_trace(
     seed_source: str = "",
     preset_source: str = "",
     runtime_source: str = "voice_registry.resolve_voice_runtime_strategy",
+    runtime_model: str = "",
 ) -> dict[str, Any]:
     return {
         "requested": requested,
@@ -243,6 +244,7 @@ def build_synthesis_trace(
         "seed_source": seed_source,
         "preset_source": preset_source,
         "runtime_source": runtime_source,
+        "runtime_model": runtime_model,
     }
 
 
@@ -352,6 +354,7 @@ def synthesize_voice_design_from_registry(model, text: str, language: str, recor
         voice_instruct_source="voice_record.voice_instruct" if record.get("voice_instruct") else "voice_record.voice_description",
         seed_source="voice_record.seed" if record.get("seed") is not None else "global_default_seed",
         preset_source="voice_record" if record.get("voice_preset") else "not_used",
+        runtime_model="voice_design",
     )
 
 
@@ -399,6 +402,7 @@ def synthesize_description_seed_preset(model, text: str, language: str, record: 
         voice_instruct_source="legacy_preset_builder",
         seed_source="voice_record.seed" if record.get("seed") is not None else "global_default_seed",
         preset_source="voice_record" if record.get("voice_preset") else "global_default",
+        runtime_model="voice_design",
     )
 
 
@@ -418,6 +422,7 @@ def synthesize_reference_conditioned(model, text: str, language: str, record: di
         voice_instruct_source="not_used",
         seed_source="not_used",
         preset_source="not_used",
+        runtime_model="base",
     )
 
 
@@ -438,6 +443,7 @@ def synthesize_clone_prompt(model, text: str, language: str, record: dict[str, A
         voice_instruct_source="not_used",
         seed_source="not_used",
         preset_source="not_used",
+        runtime_model="base",
     )
 
 
@@ -446,9 +452,15 @@ def write_wav(path: Path, wav: np.ndarray, sample_rate: int) -> None:
     sf.write(str(path), wav, sample_rate)
 
 
-def log_strategy_summary(job_id: str, record: dict[str, Any], trace: dict[str, Any]) -> None:
-    log(f"[{job_id}] Voice resolved: {record.get('voice_id', '')} mode={record.get('voice_mode', '')}")
+def log_strategy_summary(job_id: str, selection_mode: str, record: dict[str, Any], trace: dict[str, Any], *, verbose: bool = False) -> None:
+    log(f"[{job_id}] Voice selection source: {selection_mode}")
+    log(f"[{job_id}] Voice resolved: {record.get('voice_id', '')}")
+    log(f"[{job_id}] Voice name: {record.get('voice_name', '')}")
+    log(f"[{job_id}] Voice mode: {record.get('voice_mode', '')}")
     log(f"[{job_id}] Requested strategy: {trace['requested']}")
+    log(f"[{job_id}] Effective runtime strategy: {trace['used']}")
+    log(f"[{job_id}] Runtime model: {trace.get('runtime_model', '')}")
+    log(f"[{job_id}] Fallback used: {str(bool(trace['fallback_used'])).lower()}")
     log(f"[{job_id}] Runtime source: {trace.get('runtime_source', 'unknown')}")
     log(f"[{job_id}] Voice instruct source: {trace.get('voice_instruct_source', 'unknown')}")
     log(f"[{job_id}] Seed source: {trace.get('seed_source', 'unknown')}")
@@ -457,10 +469,10 @@ def log_strategy_summary(job_id: str, record: dict[str, Any], trace: dict[str, A
         preset_source = trace.get("preset_source", "unknown")
         log(f"[{job_id}] Preset used: {trace['voice_preset_used']} (source={preset_source})")
     if trace["fallback_used"]:
-        log(f"[{job_id}] Fallback strategy used: {trace['used']}")
         log(f"[{job_id}] Fallback reason: {trace['fallback_reason']}")
-    else:
-        log(f"[{job_id}] Strategy used: {trace['used']}")
+    if verbose:
+        log(f"[{job_id}] Voice debug record: {json.dumps(record, ensure_ascii=False, sort_keys=True)}")
+        log(f"[{job_id}] Voice debug trace: {json.dumps(trace, ensure_ascii=False, sort_keys=True)}")
 
 
 def synthesize_audio_for_record(
@@ -531,6 +543,7 @@ def process_job(
     language: str,
     explicit_voice_id: str | None,
     explicit_voice_name: str | None,
+    verbose_voice_debug: bool,
 ) -> None:
     job_paths = ensure_job_structure(build_job_paths(job_id, get_runtime_paths()))
     if job_paths.audio.exists() and not overwrite:
@@ -541,6 +554,8 @@ def process_job(
             explicit_voice_name=explicit_voice_name,
         )
         record = normalize_voice_record(assigned["record"]) if assigned else {}
+        if assigned and record:
+            assign_voice_to_job(job_paths, record, selection_mode=assigned.get("selection_mode", ""))
         audio_synthesis = load_job_document(job_paths).get("audio_synthesis", {})
         update_status(
             job_paths.status,
@@ -558,6 +573,10 @@ def process_job(
             tts_strategy_used=audio_synthesis.get("tts_strategy_used", ""),
             tts_fallback_used=bool(audio_synthesis.get("tts_fallback_used", False)),
             tts_fallback_reason=audio_synthesis.get("tts_fallback_reason", ""),
+            voice_instruct_source=audio_synthesis.get("voice_instruct_source", ""),
+            seed_source=audio_synthesis.get("seed_source", ""),
+            preset_source=audio_synthesis.get("preset_source", ""),
+            runtime_source=audio_synthesis.get("runtime_source", ""),
             audio_file=get_runtime_paths().to_dataset_relative(job_paths.audio),
         )
         return
@@ -576,6 +595,7 @@ def process_job(
         default_seed=default_seed,
         language=language,
     )
+    assign_voice_to_job(job_paths, record, selection_mode=selection_mode)
     wav, sample_rate, trace = synthesize_audio_for_record(
         text=text,
         language=language,
@@ -585,7 +605,7 @@ def process_job(
         voice_design_model=voice_design_model,
         base_model=base_model,
     )
-    log_strategy_summary(job_paths.job_id, record, trace)
+    log_strategy_summary(job_paths.job_id, selection_mode, record, trace, verbose=verbose_voice_debug)
     write_wav(job_paths.audio, wav, sample_rate)
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     update_job_artifact(
@@ -628,6 +648,10 @@ def process_job(
         tts_strategy_used=trace["used"],
         tts_fallback_used=trace["fallback_used"],
         tts_fallback_reason=trace["fallback_reason"],
+        voice_instruct_source=trace.get("voice_instruct_source", ""),
+        seed_source=trace.get("seed_source", ""),
+        preset_source=trace.get("preset_source", ""),
+        runtime_source=trace.get("runtime_source", ""),
         audio_file=get_runtime_paths().to_dataset_relative(job_paths.audio),
         audio_generated_at=generated_at,
     )
@@ -657,6 +681,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-short", action="store_true", default=DEFAULT_TEST_SHORT, help="Prueba corta.")
     parser.add_argument("--test-text", default=DEFAULT_TEST_TEXT, help="Texto para --test-short.")
     parser.add_argument("--use-flash-attn", action="store_true", default=DEFAULT_USE_FLASH_ATTN)
+    parser.add_argument("--verbose-voice-debug", action="store_true", help="Imprime resolucion detallada de voz y runtime.")
     return parser.parse_args()
 
 
@@ -721,6 +746,7 @@ def main() -> None:
                     language=args.language,
                     explicit_voice_id=args.voice_id,
                     explicit_voice_name=args.voice_name,
+                    verbose_voice_debug=args.verbose_voice_debug,
                 )
             except Exception as exc:
                 job_paths = ensure_job_structure(build_job_paths(job_id, get_runtime_paths()))

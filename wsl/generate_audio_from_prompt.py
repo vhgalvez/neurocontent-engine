@@ -180,6 +180,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true", default=DEFAULT_OVERWRITE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--use-flash-attn", action="store_true", default=DEFAULT_USE_FLASH_ATTN)
+    parser.add_argument("--verbose-voice-debug", action="store_true", help="Imprime resolucion detallada de voz y runtime.")
     return parser.parse_args()
 
 
@@ -301,17 +302,25 @@ def synthesize_with_voice_design(model, *, text: str, record: dict, language: st
     return wavs[0], sample_rate, trace
 
 
-def log_runtime_summary(prefix: str, record: dict, *, strategy_requested: str, strategy_used: str, engine_used: str, trace: dict):
-    log(f"{prefix} Voice resolved: {record.get('voice_id', '')} mode={record.get('voice_mode', '')}")
+def log_runtime_summary(prefix: str, selection_mode: str, record: dict, *, strategy_requested: str, strategy_used: str, engine_used: str, runtime_model: str, trace: dict, verbose: bool = False):
+    log(f"{prefix} Voice selection source: {selection_mode}")
+    log(f"{prefix} Voice resolved: {record.get('voice_id', '')}")
+    log(f"{prefix} Voice name: {record.get('voice_name', '')}")
+    log(f"{prefix} Voice mode: {record.get('voice_mode', '')}")
     log(f"{prefix} Requested strategy: {strategy_requested}")
-    log(f"{prefix} Strategy used: {strategy_used}")
+    log(f"{prefix} Effective runtime strategy: {strategy_used}")
+    log(f"{prefix} Runtime model: {runtime_model}")
     log(f"{prefix} Engine used: {engine_used}")
+    log(f"{prefix} Fallback used: false")
     log(f"{prefix} Runtime source: {trace.get('runtime_source', 'voice_registry.resolve_voice_runtime_strategy')}")
     log(f"{prefix} Voice instruct source: {trace.get('voice_instruct_source', 'unknown')}")
     log(f"{prefix} Seed source: {trace.get('seed_source', 'unknown')}")
     log(f"{prefix} Preset source: {trace.get('preset_source', 'unknown')}")
     if trace.get("voice_preset_used"):
         log(f"{prefix} Preset used: {trace['voice_preset_used']} (source={trace.get('preset_source', 'unknown')})")
+    if verbose:
+        log(f"{prefix} Voice debug record: {json.dumps(record, ensure_ascii=False, sort_keys=True)}")
+        log(f"{prefix} Voice debug trace: {json.dumps(trace, ensure_ascii=False, sort_keys=True)}")
 
 
 def main() -> None:
@@ -361,6 +370,7 @@ def main() -> None:
             reference_conditioning_used = False
             clone_prompt_used = False
             trace["voice_preset_used"] = updated_record.get("voice_preset", "")
+            runtime_model = "voice_design"
         else:
             model, _ = load_model(args.model_path, args.device, args.use_flash_attn, expected_tts_model_type="base")
             generate_clone = getattr(model, "generate_voice_clone", None)
@@ -429,17 +439,21 @@ def main() -> None:
                 "runtime_source": "voice_registry.resolve_voice_runtime_strategy",
                 "voice_preset_used": "",
             }
+            runtime_model = "base"
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         sf.write(str(output_path), wav, sample_rate)
         log(f"[voice_runtime] Audio final guardado en {output_path}")
         log_runtime_summary(
             "[voice_runtime]",
+            selection_mode,
             updated_record,
             strategy_requested=strategy_requested,
             strategy_used=strategy_used,
             engine_used=engine_used,
+            runtime_model=runtime_model,
             trace=trace,
+            verbose=args.verbose_voice_debug,
         )
         generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -485,6 +499,10 @@ def main() -> None:
                 tts_strategy_used=strategy_used,
                 tts_fallback_used=False,
                 tts_fallback_reason="",
+                voice_instruct_source=trace.get("voice_instruct_source", ""),
+                seed_source=trace.get("seed_source", ""),
+                preset_source=trace.get("preset_source", ""),
+                runtime_source=trace.get("runtime_source", ""),
                 audio_file=get_runtime_paths().to_dataset_relative(job_paths.audio),
                 audio_generated_at=generated_at,
             )

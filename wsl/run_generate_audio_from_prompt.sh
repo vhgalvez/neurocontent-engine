@@ -27,6 +27,7 @@ export QWEN_TTS_BASE_MODEL_PATH="${QWEN_TTS_BASE_MODEL_PATH:-/mnt/d/AI_Models/hu
 export QWEN_TTS_DEVICE="${QWEN_TTS_DEVICE:-auto}"
 export VIDEO_DATASET_ROOT="${VIDEO_DATASET_ROOT:-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset}"
 export VIDEO_JOBS_ROOT="${VIDEO_JOBS_ROOT:-$VIDEO_DATASET_ROOT/jobs}"
+export VIDEO_DEFAULT_VOICE_ID="${VIDEO_DEFAULT_VOICE_ID:-}"
 export PYTHONUNBUFFERED=1
 
 echo "Proyecto: $PROJECT_DIR"
@@ -34,6 +35,7 @@ echo "Python usado: $QWEN_PYTHON"
 echo "Modelo VoiceDesign disponible: $QWEN_TTS_MODEL_PATH"
 echo "Modelo Base disponible: $QWEN_TTS_BASE_MODEL_PATH"
 echo "Device: $QWEN_TTS_DEVICE"
+echo "[audio] VIDEO_DEFAULT_VOICE_ID: ${VIDEO_DEFAULT_VOICE_ID:-<unset>}"
 echo "Dataset root: $VIDEO_DATASET_ROOT"
 echo "Jobs root: $VIDEO_JOBS_ROOT"
 

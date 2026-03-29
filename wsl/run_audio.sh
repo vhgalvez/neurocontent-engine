@@ -35,6 +35,7 @@ export QWEN_TTS_TEST_TEXT="${QWEN_TTS_TEST_TEXT:-Probando sistema de audio con Q
 export QWEN_TTS_USE_FLASH_ATTN="${QWEN_TTS_USE_FLASH_ATTN:-false}"
 export VIDEO_DATASET_ROOT="${VIDEO_DATASET_ROOT:-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset}"
 export VIDEO_JOBS_ROOT="${VIDEO_JOBS_ROOT:-$VIDEO_DATASET_ROOT/jobs}"
+export VIDEO_DEFAULT_VOICE_ID="${VIDEO_DEFAULT_VOICE_ID:-}"
 export PYTHONUNBUFFERED=1
 
 echo "Proyecto: $PROJECT_DIR"
@@ -42,8 +43,9 @@ echo "Python usado: $QWEN_PYTHON"
 echo "Modelo usado: $QWEN_TTS_MODEL_PATH"
 echo "Modelo base clone/reference: $QWEN_TTS_BASE_MODEL_PATH"
 echo "Device: $QWEN_TTS_DEVICE"
-echo "Preset global de fallback: $QWEN_TTS_VOICE_PRESET"
-echo "Seed global de fallback: $QWEN_TTS_SEED"
+echo "[audio] Configured fallback preset (only used if no persistent voice is resolvable): $QWEN_TTS_VOICE_PRESET"
+echo "[audio] Configured fallback seed (only used in legacy fallback paths): $QWEN_TTS_SEED"
+echo "[audio] VIDEO_DEFAULT_VOICE_ID: ${VIDEO_DEFAULT_VOICE_ID:-<unset>}"
 echo "Dataset root: $VIDEO_DATASET_ROOT"
 echo "Jobs root: $VIDEO_JOBS_ROOT"
 
