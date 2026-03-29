@@ -32,6 +32,15 @@ Si estás trabajando en audio y voces, la lectura recomendada es:
 3. `wsl/errores.md`
 4. `wsl/AUDIO_GUIDE.md`
 
+Checklist mínimo recomendado antes de tocar audio y voces:
+
+```bash
+conda activate qwen_gpu
+which python
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+python -c "import qwen_tts; print('qwen_tts OK')"
+```
+
 ## Dataset y resolución de rutas
 
 Resolución de prioridad:

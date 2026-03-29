@@ -29,6 +29,8 @@ El sistema de voces ya no debe entenderse como una colección informal de preset
 - asignación de voz en `job.json`
 - rastro operativo en `status.json`
 
+La idea práctica es simple: hoy el audio funciona correctamente cuando se respeta el entorno validado de WSL2, se usan los wrappers oficiales y se trata el registry de voces como una fuente de verdad que no debe manipularse manualmente.
+
 ## Entorno WSL2 verificado
 
 El entorno funcional validado para Qwen3-TTS en WSL2 es:

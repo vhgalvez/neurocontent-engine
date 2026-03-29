@@ -1,219 +1,193 @@
-# Guia Completa de Voces en `neurocontent-engine`
+# Guía Técnica del Sistema de Voces
 
-Esta guia explica como funciona el sistema de voces en `vhgalvez/neurocontent-engine`, como crear una voz global, como crear una voz por job, como reutilizar una voz ya registrada y que archivos revisar para tener trazabilidad completa.
+## 1. Propósito de este documento
 
-## Nota Semantica Importante
+Este documento es la referencia técnica principal del sistema de voces de `neurocontent-engine`. Su objetivo es explicar de forma clara y completa:
 
-Una voz registrada y una estrategia de sintesis no son lo mismo.
+- cómo funciona el registro de voces
+- qué diferencia existe entre identidad vocal y estrategia de síntesis
+- cómo se integra Qwen3-TTS en WSL2
+- cómo se valida la integridad del registry
+- cómo debe crearse una voz nueva
+- cómo debe borrarse una voz de forma segura
 
-- `VIDEO_DEFAULT_VOICE_ID` solo selecciona la voz registrada.
-- `voice_mode` indica como se espera reutilizar esa voz.
-- `tts_strategy_default` indica la estrategia pedida por defecto.
-- el flujo de audio registra siempre la estrategia realmente usada y si hubo fallback.
+También conserva contexto histórico útil para evitar errores operativos ya conocidos.
 
-Modos soportados:
+## 2. Resumen ejecutivo
 
-- `design_only`
-- `reference_conditioned`
-- `clone_prompt`
+El sistema actual de voces ya no trabaja solo con presets o descripciones sueltas. La voz se modela como un recurso persistente, trazable y validable.
 
-Importante: una voz creada con `wsl/design_voice.py` queda registrada como `design_only`. Su `reference.wav` sirve como artefacto de referencia y trazabilidad, pero no implica por si solo que el flujo `run_audio.sh` vaya a condicionarse directamente con ese wav en todos los motores o estrategias.
+Cada voz vive en:
 
-## 1. Que problema resuelve este sistema
+```text
+video-dataset/voices/<voice_id>/
+```
 
-El proyecto no trata la voz como un preset suelto. La voz se maneja como una identidad persistente con:
+y normalmente contiene:
 
-- `voice_id`
-- `scope`
-- metadata reproducible
-- referencia en disco
-- asignacion al job
-- trazabilidad en `job.json` y `status.json`
+- `voice.json`
+- `reference.wav`
+- `reference.txt`
+- opcionalmente `voice_clone_prompt.json`
 
-Eso permite:
+El índice global vive en:
 
-- mantener una voz estable para todos los contenidos
-- usar voces distintas por campaña o personaje
-- saber exactamente que voz se uso en cada audio
-- volver a generar audio con la misma identidad vocal
+```text
+video-dataset/voices/voices_index.json
+```
 
-## 2. Formas de trabajar la voz
+El proyecto ahora protege explícitamente varios problemas que antes podían ocurrir:
 
-### 2.1 Voz global para todo el proyecto
+- duplicidad silenciosa de `voice_name`
+- alias humanos con formato parecido a `voice_id`
+- inconsistencias entre `voices_index.json`, `voice.json` y la carpeta física
+- borrados manuales que dejaban referencias colgantes
 
-Una sola voz reutilizable para muchos jobs.
+## 3. Entorno funcional verificado para Qwen3-TTS
 
-Casos tipicos:
+### 3.1 Plataforma validada
 
-- tu marca personal
-- mismo narrador para todos los videos
-- identidad vocal consistente para todo el canal
+El entorno operativo verificado para audio y voces es:
 
-### 2.2 Voz individual por job
+- Windows + WSL2
+- Ubuntu 24.04 LTS
+- GPU NVIDIA RTX 4070
+- entorno conda `qwen_gpu`
 
-Una voz especifica para un job concreto.
+Python válido:
 
-Casos tipicos:
+```bash
+/home/victory/miniconda3/envs/qwen_gpu/bin/python
+```
 
-- una campaña distinta
-- un personaje diferente
-- una prueba aislada
-- una voz especial para un contenido puntual
+Comando recomendado:
 
-### 2.3 Seleccion manual de una voz ya registrada
+```bash
+conda activate qwen_gpu
+```
 
-No creas una voz nueva. Eliges explicitamente una voz ya existente mediante su `voice_id`.
+El `venv` antiguo:
 
-Sirve cuando:
+```bash
+/home/victory/Qwen3-TTS/venv/bin/python
+```
 
-- ya tienes una voz global registrada
-- ya tienes varias voces creadas
-- quieres controlar exactamente que voz usar en un job
+ya no debe usarse.
 
-## 3. Precedencia real de seleccion de voz
+### 3.2 `QWEN_PYTHON` y wrappers Bash
 
-La seleccion de voz sigue este orden:
-
-1. `--voice-id` explicito
-2. voz ya asignada en `jobs/<job_id>/job.json`
-3. `VIDEO_DEFAULT_VOICE_ID` como voz global por defecto
-4. fallback legacy: auto-registro de una voz `job` desde preset y seed si no hay nada asignado
-
-Esto significa:
-
-- si pasas `--voice-id`, esa voz manda
-- si no pasas nada, el sistema mira si el job ya tiene una voz asignada
-- si tampoco hay voz en el job, usa `VIDEO_DEFAULT_VOICE_ID`
-- si no existe ninguna de esas opciones, intenta crear una voz de compatibilidad por job
-
-## 4. Donde vive la configuracion real de la voz
-
-La configuracion no vive en un solo archivo. Se reparte en varias capas.
-
-### 4.1 Wrappers Bash
-
-Scripts:
+Los wrappers de `wsl/` usan `QWEN_PYTHON` para decidir qué Python ejecuta los scripts reales:
 
 - `wsl/run_design_voice.sh`
 - `wsl/run_audio.sh`
+- `wsl/run_generate_audio_from_prompt.sh`
+- `wsl/run_delete_voice.sh`
 
-Preparan el entorno y cargan variables como:
+Fallback correcto:
 
-- `QWEN_TTS_MODEL_PATH`
-- `QWEN_TTS_DEVICE`
-- `QWEN_TTS_VOICE_PRESET`
-- `QWEN_TTS_SEED`
-- `QWEN_TTS_LANGUAGE`
-- `VIDEO_DATASET_ROOT`
-- `VIDEO_JOBS_ROOT`
+```bash
+export QWEN_PYTHON="${QWEN_PYTHON:-/home/victory/miniconda3/envs/qwen_gpu/bin/python}"
+```
 
-Tambien cargan:
+Esto significa:
 
-- `.env`
-- `wsl/voices.env`
+- si `QWEN_PYTHON` no existe, el wrapper usará el Python del entorno validado
+- si `QWEN_PYTHON` ya viene exportado externamente, se respetará el override
 
-Entorno WSL2 valido para Qwen3-TTS:
+## 4. Arquitectura conceptual del sistema de voces
 
-- activar `conda activate qwen_gpu`
-- Python por defecto: `/home/victory/miniconda3/envs/qwen_gpu/bin/python`
-- override soportado: si `QWEN_PYTHON` ya viene exportado, los wrappers lo respetan
-- no usar mas `/home/victory/Qwen3-TTS/venv/bin/python`
+### 4.1 Qué problema resuelve
 
-### 4.2 Diseno de voz
+El objetivo del sistema no es solo sintetizar audio. También necesita:
 
-El script `wsl/design_voice.py` crea una identidad vocal nueva y configurable con parametros como:
+- mantener identidad vocal consistente entre jobs
+- permitir reutilización controlada
+- soportar trazabilidad operativa
+- separar identidad vocal de estrategia de síntesis
+- evitar corrupción lógica del registry
 
-- `scope`
+### 4.2 Diferencia entre identidad vocal y estrategia de síntesis
+
+Una voz registrada y la estrategia usada para sintetizar no son lo mismo.
+
+Una voz registrada describe la identidad persistente:
+
+- `voice_id`
 - `voice_name`
-- `description`
-- `reference_text`
-- `language`
+- `voice_description`
 - `seed`
-- `model_path`
-- `device`
-- `voice_id` opcional
-- `assign_to_job` opcional
+- `model_name`
+- `reference_file`
+- `voice_mode`
+- `tts_strategy_default`
 
-Ademas:
+La estrategia de síntesis describe cómo se intentó reutilizar esa voz en una generación concreta:
 
-- genera `reference.wav`
-- registra la voz en el registry
-- puede asignarla al job
+- `description_seed_preset`
+- `reference_conditioned`
+- `clone_prompt`
+- `legacy_preset_fallback`
 
-### 4.3 Resolucion de voz al generar audio
+La estrategia realmente usada queda trazada en:
 
-El script `wsl/generar_audio_qwen.py` decide que voz usar realmente en cada job siguiendo la precedencia ya descrita.
+- `job.json`
+- `status.json`
+- logs del job
 
-Tambien:
+## 5. `voice_id` vs `voice_name`
 
-- construye la instruccion vocal final (`voice_instruct`)
-- genera el `wav`
-- actualiza `job.json`
-- actualiza `status.json`
+### 5.1 `voice_id`
 
-### 4.4 Persistencia y trazabilidad
+`voice_id` es el identificador técnico persistente del sistema.
 
-La configuracion y el uso real de la voz quedan registrados en:
+Ejemplos:
 
-- `video-dataset/voices/voices_index.json`
-- `video-dataset/voices/<voice_id>/voice.json`
-- `jobs/<job_id>/job.json`
-- `jobs/<job_id>/status.json`
+- `voice_global_0001`
+- `voice_job_000001_0001`
 
-## 5. Variables clave
+Propiedades:
 
-### En `wsl/run_audio.sh`
+- lo genera el sistema
+- debe ser estable
+- se usa como clave técnica
+- se usa para ubicar la carpeta física de la voz
 
-Variables relevantes:
+### 5.2 `voice_name`
 
-- `QWEN_TTS_MODEL_PATH`
-- `QWEN_TTS_VOICE_PRESET`
-- `QWEN_TTS_SEED`
-- `QWEN_TTS_LANGUAGE`
-- `QWEN_TTS_OVERWRITE`
-- `QWEN_TTS_DEVICE`
-- `QWEN_TTS_USE_FLASH_ATTN`
-- `VIDEO_DATASET_ROOT`
-- `VIDEO_JOBS_ROOT`
+`voice_name` es el alias lógico o humano de la voz.
 
-### En `wsl/run_design_voice.sh`
+Ejemplos:
 
-Variables relevantes:
+- `marca_personal_es`
+- `narradora_documental`
+- `campana_lanzamiento_q2`
 
-- `QWEN_PYTHON`
-- `VOICE_ENV_FILE`
-- `DOTENV_FILE`
-- `VIDEO_DATASET_ROOT`
-- `VIDEO_JOBS_ROOT`
+Propiedades:
 
-### Archivos de entorno
+- lo elige el usuario o el flujo de alta
+- describe la voz de forma semántica
+- no debe usarse como ID técnico
 
-Estas variables se cargan desde:
+### 5.3 Bug histórico y corrección
 
-- `.env`
-- `wsl/voices.env`
+Antes podían coexistir casos confusos como este:
 
-## 6. Rutas reales del sistema
+- `voice_id = voice_global_0002`
+- `voice_name = voice_global_0001`
 
-Dataset principal:
+Ese caso era peligroso porque mezclaba el identificador técnico con el alias humano y abría la puerta a decisiones operativas equivocadas.
 
-```bash
-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset
-```
+Ahora el sistema aplica estas reglas:
 
-Jobs root:
+- `voice_name` debe ser único en todo el registry
+- `voice_name` no puede parecer un `voice_id` interno
+- si el nombre ya existe, el alta aborta con error explícito
 
-```bash
-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs
-```
+La validación quedó centralizada en:
 
-Registry de voces:
+- `voice_registry.py`
 
-```bash
-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/voices
-```
-
-## 7. Donde se guardan las voces
+## 6. Estructura física del registry
 
 Estructura esperada:
 
@@ -225,20 +199,18 @@ video-dataset/
     │   ├── reference.wav
     │   ├── reference.txt
     │   └── voice_clone_prompt.json
+    ├── voice_global_0002/
+    │   ├── voice.json
+    │   ├── reference.wav
+    │   └── reference.txt
     └── voices_index.json
 ```
 
-Que significa cada archivo:
+### 6.1 `voice.json`
 
-- `voices_index.json`: indice general de voces registradas
-- `voices/<voice_id>/voice.json`: metadata completa de esa voz
-- `reference.wav`: audio de referencia generado o guardado para esa voz
-- `reference.txt`: texto usado para generar o acompanar la referencia
-- `voice_clone_prompt.json`: metadata asociada a clonacion o consistencia
+Es la metadata completa de una voz concreta.
 
-## 8. Que guarda cada voz
-
-Campos tipicos:
+Campos habituales:
 
 - `voice_id`
 - `scope`
@@ -250,575 +222,329 @@ Campos tipicos:
 - `seed`
 - `voice_instruct`
 - `reference_file`
+- `reference_text_file`
 - `voice_clone_prompt_path`
+- `voice_preset`
+- `voice_mode`
+- `tts_strategy_default`
+- `supports_reference_conditioning`
+- `supports_clone_prompt`
+- `engine`
 - `status`
 - `notes`
 - `created_at`
 - `updated_at`
 
-### Diferencia entre `voice_id` y `voice_name`
+### 6.2 `voices_index.json`
 
-- `voice_id`: identificador tecnico persistente. Ejemplo: `voice_global_0001`.
-- `voice_name`: alias logico de negocio. Ejemplo: `marca_personal_es`.
-- `voice_name` debe ser unico en todo el registry.
-- `voice_name` no puede parecer un id interno como `voice_global_0001` o `voice_job_000001_0001`.
-- si intentas crear una voz con un `voice_name` duplicado, el alta aborta con error explicito.
+Es el índice global de voces registradas. Su función es permitir:
 
-## 9. Scopes soportados
+- listar voces
+- resolver voces por `voice_id`
+- calcular nuevos IDs
+- validar integridad global
 
-`global`
+## 7. Flujo de creación de voces
 
-- voz reutilizable entre muchos jobs
-- ejemplo: `voice_global_0001`
+### 7.1 Script principal de diseño de voz
 
-`job`
-
-- voz especifica de un solo job
-- ejemplo: `voice_job_000001_0001`
-
-## 10. Crear una voz para todo el proyecto
-
-Usa este modo cuando quieras:
-
-- una sola voz para toda tu marca
-- consistencia maxima entre muchos jobs
-- una identidad vocal unificada
-
-Primero ve a la raiz del repo:
+El flujo de diseño de voz entra normalmente por:
 
 ```bash
-cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
+bash wsl/run_design_voice.sh ...
 ```
 
-Luego ejecuta:
+y ejecuta:
 
-```bash
-bash wsl/run_design_voice.sh \
-  --scope global \
-  --voice-name marca_personal_es \
-  --description "Voz madura, profesional y sobria para la marca." \
-  --reference-text "Hola, esta es la voz oficial de la marca."
-```
+- `wsl/design_voice.py`
 
-Que hace ese comando:
+### 7.2 Qué hace el flujo
 
-- carga `.env` y `wsl/voices.env`
-- exporta variables del entorno de TTS
-- llama a `wsl/design_voice.py`
-- genera la referencia
-- registra la voz en el registry
-- opcionalmente la asigna a un job
+En términos generales:
 
-Resultado esperado:
+1. valida el entorno y el registry
+2. resuelve modelo y device
+3. genera audio de referencia con Qwen3-TTS VoiceDesign
+4. registra o actualiza la voz en `voice.json` y `voices_index.json`
+5. guarda `reference.wav`
+6. guarda `reference.txt`
+7. opcionalmente asigna la voz al job
 
-```text
-video-dataset/voices/voice_global_0001/
-├── voice.json
-├── reference.wav
-└── reference.txt
-```
+### 7.3 Reglas nuevas de creación
 
-## 11. Usar esa voz en todos los jobs
+Al crear una voz nueva, el sistema aplica validaciones estrictas:
 
-### Opcion A: pasar `--voice-id` cada vez
+- `voice_name` no puede estar vacío
+- `voice_name` debe ser único
+- `voice_name` no puede parecer un `voice_id` interno
+- si el registry ya está inconsistente, el alta no debe continuar silenciosamente
 
-```bash
-bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
-bash wsl/run_audio.sh --job-id 000002 --voice-id voice_global_0001 --overwrite
-bash wsl/run_audio.sh --job-id 000003 --voice-id voice_global_0001 --overwrite
-```
-
-### Opcion B: definir una voz global por defecto
-
-```bash
-export VIDEO_DEFAULT_VOICE_ID="voice_global_0001"
-
-bash wsl/run_audio.sh --job-id 000001
-bash wsl/run_audio.sh --job-id 000002
-bash wsl/run_audio.sh --job-id 000003
-```
-
-Recomendacion: para una marca personal, esta suele ser la mejor estrategia.
-
-## 12. Crear una voz individual por job
-
-Usalo cuando un job concreto necesite su propia voz.
-
-Ejemplos:
-
-- una campaña especial
-- un personaje diferente
-- una prueba A/B
-- una narrativa con identidad vocal propia
-
-Comando recomendado:
-
-```bash
-bash wsl/run_design_voice.sh \
-  --scope job \
-  --job-id 000001 \
-  --voice-name campaña_a \
-  --description "Voz específica de campaña." \
-  --reference-text "Hola, esta es la voz de esta campaña." \
-  --assign-to-job
-```
-
-Despues puedes ejecutar:
-
-```bash
-bash wsl/run_audio.sh --job-id 000001
-```
-
-## 13. Usar una voz ya registrada manualmente
-
-Si ya conoces el `voice_id`, puedes forzar su uso:
-
-```bash
-bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
-```
-
-Eso tiene maxima prioridad.
-
-## 14. Como funciona realmente la generacion de audio
-
-El script real es:
-
-```text
-wsl/generar_audio_qwen.py
-```
-
-Flujo general:
-
-1. valida el registry
-2. resuelve la voz para el job
-3. construye la instruccion vocal
-4. genera el `wav`
-5. actualiza `job.json`
-6. actualiza `status.json`
-
-## 15. Presets de voz disponibles
-
-En el codigo actual aparecen presets como:
-
-- `mujer_podcast_seria_35_45`
-- `mujer_documental_neutra`
-- `hombre_narrador_sobrio`
-
-## 16. Que actualiza el sistema cuando genera audio
-
-Al generar audio, el job queda trazado con campos como:
-
-- `voice_id`
-- `voice_scope`
-- `voice_source`
-- `voice_name`
-- `voice_selection_mode`
-- `voice_model_name`
-- `voice_reference_file`
-- `audio_file`
-- `audio_generated_at`
-
-Eso se escribe en:
-
-- `job.json`
-- `status.json`
-
-## 17. Naming real de archivos del job
-
-```text
-jobs/000001/
-├── job.json
-├── status.json
-├── source/
-│   ├── 000001_brief.json
-│   ├── 000001_script.json
-│   ├── 000001_visual_manifest.json
-│   └── 000001_rendered_comfy_workflow.json
-├── audio/
-│   └── 000001_narration.wav
-├── subtitles/
-│   └── 000001_narration.srt
-└── logs/
-    ├── 000001_phase_editorial.log
-    ├── 000001_phase_audio.log
-    └── 000001_phase_subtitles.log
-```
-
-## 18. Que revisar para saber que voz uso un job
-
-Debes revisar estos tres sitios:
-
-### `job.json`
-
-```bash
-cat /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs/000001/job.json
-```
-
-### `status.json`
-
-```bash
-cat /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs/000001/status.json
-```
-
-### `voice.json` de la voz elegida
-
-```bash
-cat /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/voices/voice_global_0001/voice.json
-```
-
-## 19. Campos mas importantes para trazabilidad
-
-- `voice_id`
-- `scope`
-- `model_name`
-- `seed`
-- `voice_instruct`
-- `reference_file`
-- `voice_clone_prompt_path`
-- `selection_mode`
-- `voice_source`
-- `audio_file`
-- `audio_generated_at`
-
-Con eso puedes reproducir exactamente la identidad vocal.
-
-## 20. Verificacion de creacion de voz global
-
-Si al ejecutar el diseno de voz ves algo como esto:
-
-```text
-[design_voice] voice_id=voice_global_0001
-[design_voice] Referencia guardada en /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/voices/voice_global_0001/reference.wav
-Exit code: 0
-```
-
-Eso significa que:
-
-- el modelo se cargo correctamente
-- la referencia se genero
-- la voz se registro en el registry
-- se creo un `voice_id` estable
-- se guardo `reference.wav`
-- el flujo termino sin error fatal
-
-Siguientes pasos recomendados:
-
-### Paso 1: revisar la voz creada
-
-```bash
-ls -l /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/voices/voice_global_0001
-```
-
-Normalmente deberias ver:
-
-- `voice.json`
-- `reference.wav`
-- `reference.txt`
-- `voice_clone_prompt.json` si aplica
-
-### Paso 2: revisar el indice general
-
-```bash
-cat /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/voices/voices_index.json
-```
-
-Busca una entrada con:
-
-```text
-voice_id = voice_global_0001
-```
-
-### Paso 3: definir la voz global por defecto
-
-```bash
-export VIDEO_DEFAULT_VOICE_ID="voice_global_0001"
-```
-
-### Paso 4: generar audio real para un job
-
-```bash
-bash wsl/run_audio.sh --job-id 000001 --overwrite
-```
-
-Ruta esperada del audio:
-
-```bash
-/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs/000001/audio/000001_narration.wav
-```
-
-### Paso 5: revisar la trazabilidad del job
-
-```bash
-cat /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs/000001/job.json
-cat /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs/000001/status.json
-```
-
-Campos a confirmar:
-
-- `voice_id`
-- `voice_scope`
-- `voice_source`
-- `voice_name`
-- `voice_selection_mode`
-- `voice_model_name`
-- `voice_reference_file`
-- `audio_file`
-- `audio_generated_at`
-
-## 21. Flujo recomendado
-
-### Escenario A: misma voz para toda tu marca
-
-```bash
-bash wsl/run_design_voice.sh \
-  --scope global \
-  --voice-name marca_personal_es \
-  --description "Voz madura, sobria, profesional, clara y estable para la marca personal." \
-  --reference-text "Hola, esta es la voz oficial de la marca y se utilizara en todos los contenidos."
-
-export VIDEO_DEFAULT_VOICE_ID="voice_global_0001"
-
-bash wsl/run_audio.sh --job-id 000001
-bash wsl/run_audio.sh --job-id 000002
-bash wsl/run_audio.sh --job-id 000003
-```
-
-Ventajas:
-
-- maxima consistencia
-- menos caos
-- identidad de marca fuerte
-- trazabilidad simple
-
-### Escenario B: voz distinta para un job concreto
-
-```bash
-bash wsl/run_design_voice.sh \
-  --scope job \
-  --job-id 000001 \
-  --voice-name personaje_000001 \
-  --description "Voz seria, intensa y emocional para este job." \
-  --reference-text "Hola, esta voz pertenece solo a esta pieza." \
-  --assign-to-job
-
-bash wsl/run_audio.sh --job-id 000001
-```
-
-### Escenario C: forzar manualmente una voz existente
-
-```bash
-bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
-```
-
-## 22. Comandos listos para usar
-
-### Crear voz global
-
-```bash
-bash wsl/run_design_voice.sh \
-  --scope global \
-  --voice-name marca_personal_es \
-  --description "Voz madura, profesional y sobria para la marca." \
-  --reference-text "Hola, esta es la voz oficial de la marca."
-```
-
-### Crear voz por job
-
-```bash
-bash wsl/run_design_voice.sh \
-  --scope job \
-  --job-id 000001 \
-  --voice-name campaña_a \
-  --description "Voz específica de campaña." \
-  --reference-text "Hola, esta es la voz de esta campaña." \
-  --assign-to-job
-```
-
-Si el nombre ya existe, el alta falla de forma segura con:
+Error esperado si el nombre ya existe:
 
 ```text
 ERROR: ya existe una voz con ese nombre
 ```
 
+Error esperado si el alias parece un ID interno:
 
-
-
-### Usar una voz concreta en un job
-
-```bash
-bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
+```text
+ERROR: voice_name no puede parecer un voice_id interno del sistema
 ```
 
-### Definir voz global por defecto
+### 7.4 Ejemplo de creación correcta
 
 ```bash
-export VIDEO_DEFAULT_VOICE_ID="voice_global_0001"
+conda activate qwen_gpu
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
+
+bash wsl/run_design_voice.sh \
+  --scope global \
+  --voice-name marca_personal_es \
+  --description "Voz madura, profesional y sobria para la marca." \
+  --reference-text "Hola, esta es la voz oficial de la marca."
 ```
 
-### Generar audio con la voz global por defecto
+## 8. Resolución de voz al generar audio
 
-```bash
-bash wsl/run_audio.sh --job-id 000001
+El flujo de audio resuelve la voz en este orden:
+
+1. `--voice-id` explícito
+2. voz ya asignada en `job.json`
+3. `VIDEO_DEFAULT_VOICE_ID`
+4. fallback de compatibilidad cuando aplica
+
+Esto es importante porque:
+
+- `VIDEO_DEFAULT_VOICE_ID` selecciona una voz registrada
+- no obliga por sí solo a un conditioning acústico concreto
+- la estrategia real depende de `voice_mode`, `tts_strategy_default` y del flujo disponible
+
+## 9. Validación del índice de voces
+
+### 9.1 Qué valida ahora el sistema
+
+La validación del índice ya no se limita a detectar `voice_id` duplicados. Ahora comprueba:
+
+- `registry_version` soportado
+- `voice_id` duplicado
+- `voice_name` duplicado
+- carpeta física existente para cada `voice_id`
+- existencia de `voice.json`
+- consistencia entre `voice.json` y `voices_index.json`
+- validez de `voice_mode`
+- validez de `tts_strategy_default`
+
+### 9.2 Por qué era necesario
+
+Antes podían existir inconsistencias silenciosas:
+
+- carpeta borrada manualmente pero índice todavía presente
+- `voice.json` distinto de lo que decía `voices_index.json`
+- dos voces con el mismo alias lógico
+
+Ese tipo de corrupción lógica es peligrosa porque:
+
+- el sistema sigue pareciendo funcional
+- la operación humana se vuelve confusa
+- se toman decisiones con información engañosa
+
+## 10. Borrado correcto de voces
+
+### 10.1 Qué no debe hacerse
+
+No debe borrarse manualmente una carpeta dentro de:
+
+```text
+video-dataset/voices/
 ```
 
-### Generar audio para varios jobs
+porque eso puede dejar:
 
-```bash
-bash wsl/run_audio.sh --job-id 000001
-bash wsl/run_audio.sh --job-id 000002
-bash wsl/run_audio.sh --job-id 000003
-```
+- entrada viva en `voices_index.json`
+- referencias activas en jobs
+- inconsistencia entre índice y disco
 
-### Borrar una voz correctamente
+### 10.2 Flujo oficial de borrado
+
+El borrado oficial se hace mediante:
 
 ```bash
 bash wsl/run_delete_voice.sh --voice-id voice_global_0001
 ```
 
-El borrado oficial:
+Ese wrapper ejecuta:
 
-- valida que exista el `voice_id`
-- valida carpeta fisica y `voice.json`
-- aborta si la voz sigue referenciada por algun `job.json`
-- elimina carpeta e indice
-- valida consistencia final y hace rollback si falla algo en medio
+- `wsl/delete_voice.py`
 
-## 23. Verificacion practica recomendada
+que a su vez usa la lógica central en:
 
-Despues de generar audio, revisa:
+- `voice_registry.py`
 
-### Job document
+### 10.3 Qué valida el borrado
 
-```bash
-cat /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs/000001/job.json
+Antes de borrar una voz, el sistema:
+
+1. valida que `voice_id` se haya informado
+2. valida que exista en `voices_index.json`
+3. valida que exista la carpeta física
+4. valida que exista `voice.json`
+5. valida que `voice.json` corresponda al `voice_id` correcto
+6. revisa referencias activas en jobs
+
+### 10.4 Referencias activas en jobs
+
+El borrado se bloquea si la voz sigue apareciendo en:
+
+- `job.voice.voice_id`
+- `job.audio_synthesis.voice_id`
+
+Esto evita borrar una voz que todavía forma parte del contrato operativo o histórico de un job.
+
+### 10.5 Rollback
+
+El borrado se hace de forma defensiva:
+
+- la carpeta se mueve primero a un temporal
+- se reescribe el índice
+- se valida el estado final
+- solo si todo cuadra se elimina físicamente la carpeta temporal
+
+Si algo falla, se hace rollback automático de:
+
+- índice
+- carpeta de voz
+
+## 11. Troubleshooting del sistema de voces
+
+### 11.1 Error por `voice_name` duplicado
+
+```text
+ERROR: ya existe una voz con ese nombre
 ```
 
-### Status
+Qué significa:
 
-```bash
-cat /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs/000001/status.json
+- ya existe otra voz con ese alias lógico
+- el sistema está evitando una ambigüedad operativa
+
+Qué hacer:
+
+- usar otro `voice_name`
+- o reutilizar la voz ya existente mediante su `voice_id`
+
+### 11.2 Error por `voice_name` con forma de ID interno
+
+```text
+ERROR: voice_name no puede parecer un voice_id interno del sistema
 ```
 
-### Registry
+Qué significa:
 
-```bash
-cat /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/voices/voices_index.json
+- el alias humano propuesto se parece a un ID técnico reservado
+
+Qué hacer:
+
+- usar un alias semántico real, por ejemplo `marca_personal_es`
+
+### 11.3 Error al borrar una voz
+
+```text
+ERROR: no se puede eliminar voice_id=... porque sigue referenciada en jobs
 ```
 
-### Audio resultante
+Qué significa:
 
-```bash
-ls -l /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs/000001/audio/
-```
+- la voz todavía forma parte de uno o varios jobs
 
-## 24. Recomendacion final
+Qué hacer:
 
-Para la mayoria del proyecto:
+- revisar esos jobs
+- decidir si deben seguir apuntando a esa voz
+- solo después intentar el borrado otra vez
 
-- usa una voz global estable
-- usa voces por job solo para personajes distintos, campañas especiales o pruebas puntuales
+## 12. Comandos operativos reales
 
-Eso te da:
-
-- consistencia
-- claridad operativa
-- menos caos
-- mejor identidad de marca
-- trazabilidad mas limpia
-
-## 25. Conclusión
-
-Para todo el proyecto:
-
-```bash
-cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
-```
-
-Entorno correcto antes de ejecutar audio o diseno de voz:
+### 12.1 Activar entorno
 
 ```bash
 conda activate qwen_gpu
-export QWEN_PYTHON="${QWEN_PYTHON:-/home/victory/miniconda3/envs/qwen_gpu/bin/python}"
+which python
+python -V
 ```
 
+### 12.2 Validar GPU
+
 ```bash
-bash wsl/run_design_voice.sh --scope global ...
-export VIDEO_DEFAULT_VOICE_ID="voice_global_0001"
+python -c "import torch; print('cuda', torch.cuda.is_available()); print('gpu', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'Ninguna')"
 ```
 
-Para un job especifico:
+### 12.3 Validar `qwen_tts`
 
 ```bash
-bash wsl/run_design_voice.sh --scope job --job-id 000001 --assign-to-job
+python -c "import qwen_tts; print('qwen_tts OK')"
 ```
 
-Para forzar manualmente una voz existente:
+### 12.4 Diseñar una voz
 
 ```bash
-bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001
-```
-
-
-
-
-```bash
-bash -x wsl/run_design_voice.sh \
+bash wsl/run_design_voice.sh \
   --scope global \
   --voice-name marca_personal_es \
   --description "Voz madura, profesional y sobria para la marca." \
-  --reference-text "Hola, esta es la voz oficial de la marca." \
-  2>&1 | tee /tmp/run_design_voice_debug.log
-  ```
-
-```bash
-tail -n 120 /tmp/run_design_voice_debug.log
+  --reference-text "Hola, esta es la voz oficial de la marca."
 ```
 
+### 12.5 Generar audio de un job
+
 ```bash
-bash wsl/run_audio.sh
+bash wsl/run_audio.sh --job-id 000001 --overwrite
 ```
 
-
-
-Para quitarte la molestia de (base) siempre
-
-Haz esto una vez:
-
-conda config --set auto_activate_base false
-
-Luego cierra y abre terminal.
-Así ya no arrancará siempre con (base).
-
-
-conda deactivate
-conda activate qwen_gpu
-
-
-ls -l /mnt/d/AI_Models/huggingface/hub
-cd /mnt/d/AI_Models/huggingface/hub
+### 12.6 Generar audio clone/reference
 
 ```bash
-victory@DESKTOP-1O5BMFF:~$ ls -l /mnt/d/AI_Models/huggingface/hub
-total 0
-drwxrwxrwx 1 victory victory 4096 Mar 24 21:38 models--Qwen--Qwen3-TTS-12Hz-0.6B-Base
-drwxrwxrwx 1 victory victory 4096 Mar 24 22:23 models--Qwen--Qwen3-TTS-12Hz-1.7B-Base
-drwxrwxrwx 1 victory victory 4096 Mar 24 21:36 models--Qwen--Qwen3-TTS-12Hz-1.7B-CustomVoice
-drwxrwxrwx 1 victory victory 4096 Mar 24 21:27 models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign
+bash wsl/run_generate_audio_from_prompt.sh \
+  --job-id 000001 \
+  --voice-id voice_global_0001 \
+  --overwrite
 ```
 
-```bash
-cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
-source ~/miniconda3/bin/activate
-conda activate qwen_gpu
-
-bash wsl/run_design_voice.sh \
-  --scope global \
-  --voice-name voice_global_0001 \
-  --description "Voz madura, profesional y sobria para la marca. Tono calmado, seguro, limpio y natural. Español neutro, dicción clara, ritmo estable, estilo narrativo premium." \
-  --reference-text "Hola, esta es la voz oficial de la marca. Estamos probando una identidad vocal estable, profesional y consistente para contenidos de larga duración."
-  ```
-  
+### 12.7 Borrar una voz correctamente
 
 ```bash
-/home/victory/miniconda3/bin/python -m whisperx --help
+bash wsl/run_delete_voice.sh --voice-id voice_global_0001
 ```
+
+## 13. Buenas prácticas operativas
+
+- usar siempre `conda activate qwen_gpu` antes de operar audio y voces
+- tratar `voice_id` como identificador técnico y `voice_name` como alias lógico
+- no editar manualmente `voices_index.json` salvo mantenimiento excepcional
+- no borrar carpetas de voces a mano
+- revisar `job.json` y `status.json` cuando haya dudas de trazabilidad
+
+## 14. Contexto histórico útil
+
+### 14.1 Warnings no bloqueantes
+
+Durante la validación del entorno aparecieron warnings útiles para referencia futura, pero no bloqueantes:
+
+```text
+Warning: flash-attn is not installed. Will only run the manual PyTorch version.
+```
+
+y:
+
+```text
+onnxruntime ... Failed to open file: "/sys/class/drm/card0/device/vendor"
+```
+
+Ambos mensajes no invalidaron el funcionamiento base del sistema.
+
+### 14.2 Compatibilidad y legado
+
+El proyecto mantiene cierta compatibilidad de lectura con artefactos legacy, pero la operación nueva debe seguir el modelo actual:
+
+- registry persistente de voces
+- `job.json` como contrato del job
+- wrappers WSL con `QWEN_PYTHON` apuntando al entorno conda correcto

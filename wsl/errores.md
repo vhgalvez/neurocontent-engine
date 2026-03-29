@@ -69,6 +69,8 @@ Se validaron las siguientes comprobaciones operativas:
 - import correcto de `qwen_tts`
 - generación de referencia con `run_design_voice.sh`
 
+Esto es importante porque deja documentado que el problema ya no está en la viabilidad base de Qwen3-TTS sobre WSL2. El foco actual debe ponerse en la operación correcta del registry, los wrappers y la trazabilidad de voces, no en volver a reconstruir el stack desde cero sin necesidad.
+
 Comandos de verificación usados:
 
 ```bash
