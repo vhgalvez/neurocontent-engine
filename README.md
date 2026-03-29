@@ -257,6 +257,14 @@ Cada voz tiene:
 - `created_at`
 - `updated_at`
 
+### `voice_id` vs `voice_name`
+
+- `voice_id`: identificador tecnico persistente del sistema. Ejemplo: `voice_global_0001`.
+- `voice_name`: nombre logico humano de la voz. Ejemplo: `marca_personal_es`.
+- `voice_name` debe ser unico dentro del registry.
+- `voice_name` no puede parecer un `voice_id` interno como `voice_global_0001` o `voice_job_000001_0001`.
+- si intentas crear una voz con un `voice_name` ya usado, el alta aborta con error explicito.
+
 ## Semántica de voz y síntesis
 
 El sistema separa dos conceptos:
@@ -465,6 +473,16 @@ Campos críticos:
 
 ## Ejecución
 
+### Entorno WSL2 para Qwen3-TTS
+
+El entorno operativo válido para audio con Qwen3-TTS en WSL2 es:
+
+- `conda activate qwen_gpu`
+- Python: `/home/victory/miniconda3/envs/qwen_gpu/bin/python`
+- fallback por defecto en los wrappers: `QWEN_PYTHON="${QWEN_PYTHON:-/home/victory/miniconda3/envs/qwen_gpu/bin/python}"`
+- si `QWEN_PYTHON` ya viene exportado externamente, se respeta
+- no usar más `/home/victory/Qwen3-TTS/venv/bin/python`
+
 ### Editorial
 
 Desde la raíz:
@@ -498,6 +516,12 @@ bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
 ```
 
 ### Diseñar y registrar voz
+
+Reglas de alta:
+
+- `--voice-name` es un alias logico, no un `voice_id`
+- si ya existe ese `voice_name`, el sistema aborta con `ERROR: ya existe una voz con ese nombre`
+- si el nombre parece un id interno del sistema, el alta tambien aborta
 
 Voz global:
 
@@ -546,6 +570,20 @@ bash wsl/run_generate_audio_from_prompt.sh \
 ```bash
 bash wsl/run_subs.sh --job-id 000001
 ```
+
+### Borrar una voz de forma consistente
+
+```bash
+bash wsl/run_delete_voice.sh --voice-id voice_global_0001
+```
+
+Comportamiento:
+
+- valida que el `voice_id` exista en `voices_index.json`
+- valida que existan la carpeta fisica y `voice.json`
+- aborta si algun `job.json` sigue referenciando esa voz
+- elimina la carpeta de la voz y su entrada en `voices_index.json`
+- valida el registry final y hace rollback automatico si algo falla durante el proceso
 
 ## Ejemplo concreto de job `000001`
 

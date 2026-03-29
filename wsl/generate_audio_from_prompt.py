@@ -152,7 +152,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--voice-clone-prompt", help="JSON previamente serializado.")
     parser.add_argument("--save-prompt", action="store_true", help="Guarda el prompt serializado.")
     parser.add_argument("--prompt-output", help="Ruta explicita para guardar el prompt serializado.")
-    parser.add_argument("--voice-name", default="voz_principal")
+    parser.add_argument(
+        "--voice-name",
+        default="voz_principal",
+        help="Nombre logico de la voz. Debe ser unico y no parecer un voice_id interno.",
+    )
     parser.add_argument("--scope", choices=["global", "job"], default="global")
     parser.add_argument("--x-vector-only-mode", action="store_true", default=DEFAULT_X_VECTOR_ONLY)
     parser.add_argument("--language", default=DEFAULT_LANGUAGE)

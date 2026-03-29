@@ -65,9 +65,9 @@ ya no es el que debes usar.
 
 5. Qué hay que dejar configurado en el proyecto
 
-En wsl/voices.env debe quedar algo así:
+En `wsl/voices.env` debe quedar así para mantener el override externo de `QWEN_PYTHON`:
 
-export QWEN_PYTHON="/home/victory/miniconda3/envs/qwen_gpu/bin/python"
+export QWEN_PYTHON="${QWEN_PYTHON:-/home/victory/miniconda3/envs/qwen_gpu/bin/python}"
 
 Y cualquier script que apunte al venv viejo hay que cambiarlo a esa ruta.
 

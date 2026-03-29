@@ -3,7 +3,7 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-QWEN_PYTHON="${QWEN_PYTHON:-$HOME/Qwen3-TTS/venv/bin/python}"
+QWEN_PYTHON="${QWEN_PYTHON:-/home/victory/miniconda3/envs/qwen_gpu/bin/python}"
 VOICE_ENV_FILE="${VOICE_ENV_FILE:-$PROJECT_DIR/wsl/voices.env}"
 DOTENV_FILE="${DOTENV_FILE:-$PROJECT_DIR/.env}"
 

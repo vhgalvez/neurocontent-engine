@@ -15,7 +15,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 
 from config import configure_runtime, get_runtime_paths  # noqa: E402
 from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
-from voice_registry import assign_voice_to_job, register_voice  # noqa: E402
+from voice_registry import assign_voice_to_job, register_voice, validate_voice_index  # noqa: E402
 
 os.environ["ORT_LOGGING_LEVEL"] = "3"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -101,7 +101,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scope", choices=["global", "job"], default="global")
     parser.add_argument("--job-id", help="Obligatorio cuando scope=job.")
     parser.add_argument("--voice-id", help="Permite forzar un voice_id concreto.")
-    parser.add_argument("--voice-name", default="voz_principal", help="Nombre descriptivo de la voz.")
+    parser.add_argument(
+        "--voice-name",
+        default="voz_principal",
+        help="Nombre logico de la voz. Debe ser unico y no parecer un voice_id interno.",
+    )
     parser.add_argument("--description", default=DEFAULT_DESCRIPTION, help="Descripcion natural de la voz.")
     parser.add_argument("--reference-text", default=DEFAULT_REFERENCE_TEXT, help="Texto corto para la referencia.")
     parser.add_argument("--language", default=DEFAULT_LANGUAGE, help="Idioma.")
@@ -116,6 +120,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     configure_runtime(dataset_root=args.dataset_root, jobs_root=args.jobs_root)
+    validate_voice_index(get_runtime_paths())
 
     try:
         description = normalize_text(args.description)

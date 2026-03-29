@@ -112,6 +112,13 @@ Tambien cargan:
 - `.env`
 - `wsl/voices.env`
 
+Entorno WSL2 valido para Qwen3-TTS:
+
+- activar `conda activate qwen_gpu`
+- Python por defecto: `/home/victory/miniconda3/envs/qwen_gpu/bin/python`
+- override soportado: si `QWEN_PYTHON` ya viene exportado, los wrappers lo respetan
+- no usar mas `/home/victory/Qwen3-TTS/venv/bin/python`
+
 ### 4.2 Diseno de voz
 
 El script `wsl/design_voice.py` crea una identidad vocal nueva y configurable con parametros como:
@@ -248,6 +255,14 @@ Campos tipicos:
 - `notes`
 - `created_at`
 - `updated_at`
+
+### Diferencia entre `voice_id` y `voice_name`
+
+- `voice_id`: identificador tecnico persistente. Ejemplo: `voice_global_0001`.
+- `voice_name`: alias logico de negocio. Ejemplo: `marca_personal_es`.
+- `voice_name` debe ser unico en todo el registry.
+- `voice_name` no puede parecer un id interno como `voice_global_0001` o `voice_job_000001_0001`.
+- si intentas crear una voz con un `voice_name` duplicado, el alta aborta con error explicito.
 
 ## 9. Scopes soportados
 
@@ -619,6 +634,12 @@ bash wsl/run_design_voice.sh \
   --assign-to-job
 ```
 
+Si el nombre ya existe, el alta falla de forma segura con:
+
+```text
+ERROR: ya existe una voz con ese nombre
+```
+
 
 
 
@@ -647,6 +668,20 @@ bash wsl/run_audio.sh --job-id 000001
 bash wsl/run_audio.sh --job-id 000002
 bash wsl/run_audio.sh --job-id 000003
 ```
+
+### Borrar una voz correctamente
+
+```bash
+bash wsl/run_delete_voice.sh --voice-id voice_global_0001
+```
+
+El borrado oficial:
+
+- valida que exista el `voice_id`
+- valida carpeta fisica y `voice.json`
+- aborta si la voz sigue referenciada por algun `job.json`
+- elimina carpeta e indice
+- valida consistencia final y hace rollback si falla algo en medio
 
 ## 23. Verificacion practica recomendada
 
@@ -699,6 +734,13 @@ Para todo el proyecto:
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
 ```
 
+Entorno correcto antes de ejecutar audio o diseno de voz:
+
+```bash
+conda activate qwen_gpu
+export QWEN_PYTHON="${QWEN_PYTHON:-/home/victory/miniconda3/envs/qwen_gpu/bin/python}"
+```
+
 ```bash
 bash wsl/run_design_voice.sh --scope global ...
 export VIDEO_DEFAULT_VOICE_ID="voice_global_0001"
@@ -749,7 +791,7 @@ Así ya no arrancará siempre con (base).
 
 
 conda deactivate
-source /home/victory/Qwen3-TTS/venv/bin/activate
+conda activate qwen_gpu
 
 
 ls -l /mnt/d/AI_Models/huggingface/hub
@@ -763,6 +805,19 @@ drwxrwxrwx 1 victory victory 4096 Mar 24 22:23 models--Qwen--Qwen3-TTS-12Hz-1.7B
 drwxrwxrwx 1 victory victory 4096 Mar 24 21:36 models--Qwen--Qwen3-TTS-12Hz-1.7B-CustomVoice
 drwxrwxrwx 1 victory victory 4096 Mar 24 21:27 models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign
 ```
+
+```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
+source ~/miniconda3/bin/activate
+conda activate qwen_gpu
+
+bash wsl/run_design_voice.sh \
+  --scope global \
+  --voice-name voice_global_0001 \
+  --description "Voz madura, profesional y sobria para la marca. Tono calmado, seguro, limpio y natural. Español neutro, dicción clara, ritmo estable, estilo narrativo premium." \
+  --reference-text "Hola, esta es la voz oficial de la marca. Estamos probando una identidad vocal estable, profesional y consistente para contenidos de larga duración."
+  ```
+  
 
 ```bash
 /home/victory/miniconda3/bin/python -m whisperx --help

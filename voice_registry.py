@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,7 @@ TTS_STRATEGIES = {
     "clone_prompt",
     "legacy_preset_fallback",
 }
+RESERVED_VOICE_NAME_PATTERN = re.compile(r"^voice_(global|job)_.+$", re.IGNORECASE)
 
 
 def now_iso() -> str:
@@ -112,6 +115,98 @@ def _voice_record_path(runtime: RuntimePaths, voice_id: str) -> Path:
     return runtime.voices_root / voice_id / "voice.json"
 
 
+def _normalize_voice_name(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _voice_name_key(value: Any) -> str:
+    return _normalize_voice_name(value).casefold()
+
+
+def _find_index_record_by_voice_name(
+    runtime: RuntimePaths,
+    voice_name: str,
+    *,
+    exclude_voice_id: str | None = None,
+) -> dict[str, Any] | None:
+    target = _voice_name_key(voice_name)
+    if not target:
+        return None
+    for record in load_voice_index(runtime)["voices"]:
+        record_voice_id = str(record.get("voice_id", "")).strip()
+        if exclude_voice_id and record_voice_id == exclude_voice_id:
+            continue
+        if _voice_name_key(record.get("voice_name", "")) == target:
+            return normalize_voice_record(record)
+    return None
+
+
+def _iter_voice_dirs(runtime: RuntimePaths):
+    if not runtime.voices_root.exists():
+        return
+    for child in sorted(runtime.voices_root.iterdir(), key=lambda path: path.name):
+        if not child.is_dir():
+            continue
+        if child.name.startswith(".delete_tmp_"):
+            continue
+        yield child
+
+
+def _find_disk_record_by_voice_name(
+    runtime: RuntimePaths,
+    voice_name: str,
+    *,
+    exclude_voice_id: str | None = None,
+) -> dict[str, Any] | None:
+    target = _voice_name_key(voice_name)
+    if not target:
+        return None
+    for voice_dir in _iter_voice_dirs(runtime):
+        voice_id = voice_dir.name
+        if exclude_voice_id and voice_id == exclude_voice_id:
+            continue
+        file_record = safe_read_json(voice_dir / "voice.json", default=None)
+        if not file_record:
+            continue
+        if _voice_name_key(file_record.get("voice_name", "")) == target:
+            return normalize_voice_record(file_record)
+    return None
+
+
+def validate_voice_name(
+    runtime: RuntimePaths,
+    voice_name: str,
+    *,
+    current_voice_id: str | None = None,
+) -> str:
+    normalized_voice_name = _normalize_voice_name(voice_name)
+    if not normalized_voice_name:
+        raise ValueError("ERROR: voice_name no puede estar vacio")
+    if RESERVED_VOICE_NAME_PATTERN.match(normalized_voice_name):
+        raise ValueError(
+            "ERROR: voice_name no puede parecer un voice_id interno del sistema "
+            f"({normalized_voice_name})"
+        )
+
+    existing = _find_index_record_by_voice_name(
+        runtime,
+        normalized_voice_name,
+        exclude_voice_id=current_voice_id,
+    )
+    if existing is None:
+        existing = _find_disk_record_by_voice_name(
+            runtime,
+            normalized_voice_name,
+            exclude_voice_id=current_voice_id,
+        )
+    if existing is not None:
+        raise ValueError(
+            "ERROR: ya existe una voz con ese nombre "
+            f"(voice_name={normalized_voice_name}, voice_id={existing.get('voice_id', '')})"
+        )
+    return normalized_voice_name
+
+
 def get_voice(runtime: RuntimePaths, voice_id: str) -> dict[str, Any] | None:
     for record in load_voice_index(runtime)["voices"]:
         if record.get("voice_id") == voice_id:
@@ -149,12 +244,13 @@ def upsert_voice(runtime: RuntimePaths, record: dict[str, Any]) -> dict[str, Any
     voice_id = str(record["voice_id"]).strip()
     if not voice_id:
         raise ValueError("voice_id es obligatorio.")
+    voice_name = validate_voice_name(runtime, record.get("voice_name", voice_id), current_voice_id=voice_id)
 
     stored = normalize_voice_record({
         "voice_id": voice_id,
         "scope": record.get("scope", "global"),
         "job_id": record.get("job_id"),
-        "voice_name": record.get("voice_name", voice_id),
+        "voice_name": voice_name,
         "voice_description": record.get("voice_description", ""),
         "model_name": record.get("model_name", ""),
         "language": record.get("language", ""),
@@ -414,6 +510,13 @@ def validate_voice_record(record: dict[str, Any]) -> None:
         raise ValueError(f"Voice record invalido. Faltan claves: {', '.join(missing)}")
     if normalized["scope"] not in {"global", "job"}:
         raise ValueError(f"Scope de voz invalido: {normalized['scope']}")
+    if not _normalize_voice_name(normalized["voice_name"]):
+        raise ValueError("voice_name invalido: no puede estar vacio")
+    if RESERVED_VOICE_NAME_PATTERN.match(normalized["voice_name"]):
+        raise ValueError(
+            "voice_name invalido: no puede parecer un voice_id interno "
+            f"({normalized['voice_name']})"
+        )
     if normalized["voice_mode"] not in VOICE_MODES:
         raise ValueError(f"voice_mode invalido: {normalized['voice_mode']}")
     if normalized["tts_strategy_default"] not in TTS_STRATEGIES:
@@ -425,9 +528,155 @@ def validate_voice_index(runtime: RuntimePaths) -> None:
     if payload.get("registry_version") != "1.0":
         raise ValueError(f"registry_version no soportado: {payload.get('registry_version')}")
     seen_ids: set[str] = set()
+    seen_names: dict[str, str] = {}
     for record in payload.get("voices", []):
         validate_voice_record(record)
         voice_id = str(record["voice_id"])
         if voice_id in seen_ids:
             raise ValueError(f"voice_id duplicado en registry: {voice_id}")
         seen_ids.add(voice_id)
+        voice_name_key = _voice_name_key(record.get("voice_name", ""))
+        existing_voice_id = seen_names.get(voice_name_key)
+        if existing_voice_id is not None:
+            raise ValueError(
+                "voice_name duplicado en registry: "
+                f"{record.get('voice_name', '')} "
+                f"(voice_id={voice_id}, ya usado por voice_id={existing_voice_id})"
+            )
+        seen_names[voice_name_key] = voice_id
+
+        voice_dir = runtime.voices_root / voice_id
+        voice_file = voice_dir / "voice.json"
+        if not voice_dir.exists():
+            raise ValueError(f"Falta carpeta fisica para voice_id={voice_id}: {voice_dir}")
+        if not voice_file.exists():
+            raise ValueError(f"Falta voice.json para voice_id={voice_id}: {voice_file}")
+
+        file_record = safe_read_json(voice_file, default=None)
+        if not file_record:
+            raise ValueError(f"voice.json vacio o invalido para voice_id={voice_id}: {voice_file}")
+        file_voice_id = str(file_record.get("voice_id", "")).strip()
+        if file_voice_id != voice_id:
+            raise ValueError(
+                f"voice.json inconsistente para {voice_id}: declara voice_id={file_voice_id}"
+            )
+        file_voice_name_key = _voice_name_key(file_record.get("voice_name", ""))
+        if file_voice_name_key != voice_name_key:
+            raise ValueError(
+                "voice.json inconsistente con voices_index.json para "
+                f"voice_id={voice_id}: voice_name index={record.get('voice_name', '')} "
+                f"voice.json={file_record.get('voice_name', '')}"
+            )
+
+
+def find_voice_job_references(runtime: RuntimePaths, voice_id: str) -> list[dict[str, str]]:
+    references: list[dict[str, str]] = []
+    if not runtime.jobs_root.exists():
+        return references
+
+    for job_dir in sorted((path for path in runtime.jobs_root.iterdir() if path.is_dir()), key=lambda path: path.name):
+        job_file = job_dir / "job.json"
+        if not job_file.exists():
+            continue
+        payload = safe_read_json(job_file, default={}) or {}
+        job_voice_id = str((payload.get("voice") or {}).get("voice_id", "")).strip()
+        if job_voice_id == voice_id:
+            references.append({"job_id": job_dir.name, "location": "job.voice.voice_id"})
+        audio_voice_id = str((payload.get("audio_synthesis") or {}).get("voice_id", "")).strip()
+        if audio_voice_id == voice_id:
+            references.append({"job_id": job_dir.name, "location": "job.audio_synthesis.voice_id"})
+    return references
+
+
+def delete_voice(runtime: RuntimePaths, voice_id: str) -> dict[str, Any]:
+    normalized_voice_id = str(voice_id or "").strip()
+    if not normalized_voice_id:
+        raise ValueError("ERROR: voice_id es obligatorio para eliminar una voz")
+
+    index_payload = load_voice_index(runtime)
+    matching_records = [
+        normalize_voice_record(record)
+        for record in index_payload.get("voices", [])
+        if str(record.get("voice_id", "")).strip() == normalized_voice_id
+    ]
+    if not matching_records:
+        raise RuntimeError(f"ERROR: no existe voice_id={normalized_voice_id} en voices_index.json")
+    if len(matching_records) != 1:
+        raise RuntimeError(f"ERROR: voices_index.json es inconsistente para voice_id={normalized_voice_id}")
+
+    record = matching_records[0]
+    voice_dir = runtime.voices_root / normalized_voice_id
+    voice_file = voice_dir / "voice.json"
+    if not voice_dir.exists():
+        raise RuntimeError(
+            f"ERROR: no se puede eliminar {normalized_voice_id} porque falta su carpeta fisica: {voice_dir}"
+        )
+    if not voice_file.exists():
+        raise RuntimeError(
+            f"ERROR: no se puede eliminar {normalized_voice_id} porque falta voice.json: {voice_file}"
+        )
+
+    file_record = safe_read_json(voice_file, default=None)
+    if not file_record:
+        raise RuntimeError(f"ERROR: voice.json invalido para {normalized_voice_id}: {voice_file}")
+    if str(file_record.get("voice_id", "")).strip() != normalized_voice_id:
+        raise RuntimeError(
+            "ERROR: voice.json no coincide con el directorio fisico de la voz "
+            f"({normalized_voice_id})"
+        )
+
+    references = find_voice_job_references(runtime, normalized_voice_id)
+    if references:
+        jobs = ", ".join(f"{row['job_id']}:{row['location']}" for row in references)
+        raise RuntimeError(
+            f"ERROR: no se puede eliminar voice_id={normalized_voice_id} porque sigue referenciada en jobs: {jobs}"
+        )
+
+    backup_dir = runtime.voices_root / f".delete_tmp_{normalized_voice_id}"
+    if backup_dir.exists():
+        raise RuntimeError(
+            f"ERROR: existe un directorio temporal de borrado pendiente: {backup_dir}"
+        )
+
+    remaining_records = [
+        row
+        for row in index_payload.get("voices", [])
+        if str(row.get("voice_id", "")).strip() != normalized_voice_id
+    ]
+    original_updated_at = index_payload.get("updated_at", "")
+
+    voice_dir.rename(backup_dir)
+    try:
+        updated_payload = {
+            "registry_version": index_payload.get("registry_version", "1.0"),
+            "voices": remaining_records,
+            "updated_at": original_updated_at,
+        }
+        save_voice_index(runtime, updated_payload)
+        validate_voice_index(runtime)
+        shutil.rmtree(backup_dir)
+    except Exception as exc:
+        rollback_error: Exception | None = None
+        try:
+            index_payload["updated_at"] = original_updated_at
+            save_voice_index(runtime, index_payload)
+            if backup_dir.exists() and not voice_dir.exists():
+                backup_dir.rename(voice_dir)
+        except Exception as restore_exc:
+            rollback_error = restore_exc
+
+        if rollback_error is not None:
+            raise RuntimeError(
+                "ERROR: fallo eliminando la voz y tambien fallo el rollback. "
+                f"Error original: {exc}. Error rollback: {rollback_error}"
+            ) from exc
+        raise RuntimeError(
+            f"ERROR: fallo eliminando la voz {normalized_voice_id}. Se hizo rollback automatico. Detalle: {exc}"
+        ) from exc
+
+    return {
+        "voice_id": normalized_voice_id,
+        "voice_name": record.get("voice_name", ""),
+        "deleted_dir": str(voice_dir),
+        "remaining_voices": len(remaining_records),
+    }
