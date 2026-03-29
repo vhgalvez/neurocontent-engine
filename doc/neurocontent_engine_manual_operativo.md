@@ -1287,15 +1287,10 @@ Y luego entregas el job resultante al pipeline visual downstream.
 
 
 
-
+```bash
 bash wsl/run_delete_voice.sh --voice-id voice_global_0001
-
 bash wsl/run_reset_audio_state.sh --scope all --dry-run
-
 bash wsl/run_reset_audio_state.sh --scope all --confirm
-
-
 bash wsl/run_reset_audio_state.sh --scope voices --confirm
-
-
 bash wsl/run_reset_audio_state.sh --scope generated --confirm
+```
