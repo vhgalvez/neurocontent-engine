@@ -763,3 +763,7 @@ drwxrwxrwx 1 victory victory 4096 Mar 24 22:23 models--Qwen--Qwen3-TTS-12Hz-1.7B
 drwxrwxrwx 1 victory victory 4096 Mar 24 21:36 models--Qwen--Qwen3-TTS-12Hz-1.7B-CustomVoice
 drwxrwxrwx 1 victory victory 4096 Mar 24 21:27 models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign
 ```
+
+```bash
+/home/victory/miniconda3/bin/python -m whisperx --help
+```
