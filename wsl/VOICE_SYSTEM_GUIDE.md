@@ -568,24 +568,6 @@ bash wsl/run_audio.sh --job-id 000002
 bash wsl/run_audio.sh --job-id 000003
 ```
 
-```bash
-bash -x wsl/run_design_voice.sh \
-  --scope global \
-  --voice-name marca_personal_es \
-  --description "Voz madura, profesional y sobria para la marca." \
-  --reference-text "Hola, esta es la voz oficial de la marca." \
-  2>&1 | tee /tmp/run_design_voice_debug.log
-  ```
-
-```bash
-tail -n 120 /tmp/run_design_voice_debug.log
-```
-
-```bash
-bash wsl/run_audio.sh
-```
-
-
 Ventajas:
 
 - maxima consistencia
@@ -714,6 +696,10 @@ Eso te da:
 Para todo el proyecto:
 
 ```bash
+cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
+```
+
+```bash
 bash wsl/run_design_voice.sh --scope global ...
 export VIDEO_DEFAULT_VOICE_ID="voice_global_0001"
 ```
@@ -728,4 +714,52 @@ Para forzar manualmente una voz existente:
 
 ```bash
 bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001
+```
+
+
+
+
+```bash
+bash -x wsl/run_design_voice.sh \
+  --scope global \
+  --voice-name marca_personal_es \
+  --description "Voz madura, profesional y sobria para la marca." \
+  --reference-text "Hola, esta es la voz oficial de la marca." \
+  2>&1 | tee /tmp/run_design_voice_debug.log
+  ```
+
+```bash
+tail -n 120 /tmp/run_design_voice_debug.log
+```
+
+```bash
+bash wsl/run_audio.sh
+```
+
+
+
+Para quitarte la molestia de (base) siempre
+
+Haz esto una vez:
+
+conda config --set auto_activate_base false
+
+Luego cierra y abre terminal.
+Así ya no arrancará siempre con (base).
+
+
+conda deactivate
+source /home/victory/Qwen3-TTS/venv/bin/activate
+
+
+ls -l /mnt/d/AI_Models/huggingface/hub
+cd /mnt/d/AI_Models/huggingface/hub
+
+```bash
+victory@DESKTOP-1O5BMFF:~$ ls -l /mnt/d/AI_Models/huggingface/hub
+total 0
+drwxrwxrwx 1 victory victory 4096 Mar 24 21:38 models--Qwen--Qwen3-TTS-12Hz-0.6B-Base
+drwxrwxrwx 1 victory victory 4096 Mar 24 22:23 models--Qwen--Qwen3-TTS-12Hz-1.7B-Base
+drwxrwxrwx 1 victory victory 4096 Mar 24 21:36 models--Qwen--Qwen3-TTS-12Hz-1.7B-CustomVoice
+drwxrwxrwx 1 victory victory 4096 Mar 24 21:27 models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign
 ```
