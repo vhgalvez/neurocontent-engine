@@ -15,7 +15,15 @@ sys.path.insert(0, str(PROJECT_DIR))
 
 from config import configure_runtime, get_runtime_paths  # noqa: E402
 from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
-from voice_registry import assign_voice_to_job, register_voice, validate_voice_index  # noqa: E402
+from voice_registry import (  # noqa: E402
+    assign_voice_to_job,
+    generate_voice_id,
+    get_voice,
+    get_voice_by_name,
+    register_voice,
+    validate_voice_index,
+    validate_voice_name,
+)
 
 os.environ["ORT_LOGGING_LEVEL"] = "3"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -114,6 +122,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--assign-to-job", action="store_true", help="Asigna la voz al job si scope=job.")
     parser.add_argument("--use-flash-attn", action="store_true", default=DEFAULT_USE_FLASH_ATTN)
+    parser.add_argument("--verbose-voice-debug", action="store_true", help="Imprime diagnostico detallado de registry y rutas.")
     return parser.parse_args()
 
 
@@ -130,6 +139,24 @@ def main() -> None:
         if not description or not reference_text:
             raise RuntimeError("description y reference_text no pueden estar vacios")
 
+        runtime = get_runtime_paths()
+        normalized_voice_name = normalize_text(args.voice_name).replace(" ", "_")
+        provisional_voice_id = args.voice_id or generate_voice_id(runtime, scope=args.scope, job_id=args.job_id)
+        existing_by_name = get_voice_by_name(runtime, normalized_voice_name)
+        existing_by_id = get_voice(runtime, provisional_voice_id)
+        validate_voice_name(runtime, normalized_voice_name, current_voice_id=provisional_voice_id)
+
+        if args.verbose_voice_debug:
+            voice_index = runtime.voices_index_file.read_text(encoding="utf-8") if runtime.voices_index_file.exists() else "<missing>"
+            log(f"[design_voice] runtime.dataset_root={runtime.dataset_root}")
+            log(f"[design_voice] runtime.jobs_root={runtime.jobs_root}")
+            log(f"[design_voice] runtime.voices_root={runtime.voices_root}")
+            log(f"[design_voice] runtime.voices_index_file={runtime.voices_index_file}")
+            log(f"[design_voice] provisional_voice_id={provisional_voice_id}")
+            log(f"[design_voice] existing_by_name={existing_by_name}")
+            log(f"[design_voice] existing_by_id={existing_by_id}")
+            log(f"[design_voice] voices_index_snapshot={voice_index}")
+
         set_global_seed(args.seed)
         model, resolved_model_path = load_model(args.model_path, args.device, args.use_flash_attn)
         generator = getattr(model, "generate_voice_design", None)
@@ -145,33 +172,8 @@ def main() -> None:
         if not wavs:
             raise RuntimeError("generate_voice_design() no devolvio audio")
 
-        runtime = get_runtime_paths()
-        record = register_voice(
-            runtime,
-            scope=args.scope,
-            job_id=args.job_id,
-            voice_name=normalize_text(args.voice_name).replace(" ", "_"),
-            voice_description=description,
-            model_name=resolved_model_path,
-            language=args.language,
-            seed=args.seed,
-            voice_instruct=description,
-            reference_text_file=None,
-            engine="voice_design",
-            voice_mode="design_only",
-            tts_strategy_default="description_seed_preset",
-            supports_reference_conditioning=False,
-            supports_clone_prompt=False,
-            voice_id=args.voice_id,
-            notes=(
-                "Referencia generada con Qwen3-TTS VoiceDesign. "
-                "Esta voz queda registrada como design_only: reference.wav es un artefacto "
-                "de referencia y trazabilidad, no una garantia de condicionamiento acustico "
-                "directo en flujos posteriores."
-            ),
-        )
-
-        voice_dir = runtime.voices_root / record["voice_id"]
+        voice_dir = runtime.voices_root / provisional_voice_id
+        voice_dir.mkdir(parents=True, exist_ok=True)
         reference_wav = voice_dir / "reference.wav"
         reference_txt = voice_dir / "reference.txt"
         sf.write(str(reference_wav), wavs[0], sample_rate)
@@ -179,14 +181,14 @@ def main() -> None:
 
         record = register_voice(
             runtime,
-            scope=record["scope"],
-            job_id=record.get("job_id"),
-            voice_name=record["voice_name"],
-            voice_description=record["voice_description"],
-            model_name=record["model_name"],
-            language=record["language"],
-            seed=record["seed"],
-            voice_instruct=record["voice_instruct"],
+            scope=args.scope,
+            job_id=args.job_id,
+            voice_name=normalized_voice_name,
+            voice_description=description,
+            model_name=resolved_model_path,
+            language=args.language,
+            seed=args.seed,
+            voice_instruct=description,
             reference_file=str(reference_wav),
             reference_text_file=str(reference_txt),
             engine="voice_design",
@@ -194,8 +196,13 @@ def main() -> None:
             tts_strategy_default="description_seed_preset",
             supports_reference_conditioning=False,
             supports_clone_prompt=False,
-            voice_id=record["voice_id"],
-            notes=record["notes"],
+            voice_id=provisional_voice_id,
+            notes=(
+                "Referencia generada con Qwen3-TTS VoiceDesign. "
+                "Esta voz queda registrada como design_only: reference.wav es un artefacto "
+                "de referencia y trazabilidad, no una garantia de condicionamiento acustico "
+                "directo en flujos posteriores."
+            ),
         )
 
         if args.assign_to_job and args.job_id:

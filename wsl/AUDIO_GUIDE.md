@@ -94,10 +94,27 @@ bash wsl/run_design_voice.sh \
   --reference-text "Hola, esta es la voz oficial de la marca."
 ```
 
+Diseñar una voz nueva con diagnóstico de registry:
+
+```bash
+bash wsl/run_design_voice.sh \
+  --scope global \
+  --voice-name narrador_documental_es \
+  --description "Voz masculina adulta, sobria y documental." \
+  --reference-text "Bienvenidos. Esta es una prueba." \
+  --verbose-voice-debug
+```
+
 Generar audio para un job:
 
 ```bash
 bash wsl/run_audio.sh --job-id 000001 --overwrite
+```
+
+Generar audio para un job con trazabilidad ampliada:
+
+```bash
+bash wsl/run_audio.sh --job-id 000001 --overwrite --verbose-voice-debug
 ```
 
 Generar audio para una voz persistida `design_only`:
@@ -135,6 +152,7 @@ bash wsl/reset_system.sh
 - No uses `voice_name` con forma de `voice_id` interno.
 - No asumas que `reference.wav` implica siempre conditioning acústico directo; eso depende de `voice_mode` y de la estrategia real de síntesis.
 - No asumas que `QWEN_TTS_VOICE_PRESET` define la identidad de una voz persistida. Ese preset es solo fallback legacy.
+- Cuando el wrapper imprime el fallback preset configurado, interprétalo como configuración disponible, no como prueba de uso efectivo.
 - No mezcles el entorno conda actual con `venv` antiguos.
 
 ## Dónde mirar según el problema

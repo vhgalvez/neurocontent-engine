@@ -1270,6 +1270,8 @@ conda activate qwen_gpu
 cd /mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/neurocontent-engine
 python main.py
 bash wsl/run_design_voice.sh --scope global --voice-name marca_personal_es --description "Voz madura, profesional y sobria para la marca." --reference-text "Hola, esta es la voz oficial de la marca."
+
+bash wsl/run_audio.sh --voice-name marca_personal_es --overwrite
 bash wsl/run_audio.sh --job-id 000001 --voice-name marca_personal_es --overwrite
 bash wsl/run_subs.sh --job-id 000001
 ```

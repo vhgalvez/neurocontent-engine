@@ -390,6 +390,13 @@ Debe hacer esto:
 - si la voz seleccionada es `clone_ready`, `clone_prompt` o `reference_conditioned`, usar Base
 - si no hay voz persistida, permitir el fallback legacy controlado
 
+Importante sobre el wrapper:
+
+- la línea `Configured fallback preset...` es informativa
+- no significa que ese preset se esté usando realmente
+- el preset global solo entra en juego si la estrategia efectiva termina siendo `legacy_preset_fallback`
+- el runtime ahora imprime siempre la fuente de selección, la voz resuelta y la estrategia efectiva para evitar ambigüedad
+
 ### `bash wsl/run_generate_audio_from_prompt.sh`
 
 Es el flujo puntual. Ya no debe entenderse como un flujo exclusivamente clone/reference.
@@ -424,27 +431,63 @@ El sistema registra al menos estos conceptos:
 Ejemplo correcto de una voz `design_only` reutilizada sin contaminación de preset global:
 
 ```text
-[000001] Voice resolved: voice_global_0001 mode=design_only
+[audio] Configured fallback preset (only used if no persistent voice is resolvable): mujer_podcast_seria_35_45
+[audio] VIDEO_DEFAULT_VOICE_ID: voice_global_0001
+[000001] Voice selection source: global_default
+[000001] Voice resolved: voice_global_0001
+[000001] Voice name: narrador_documental_es
+[000001] Voice mode: design_only
 [000001] Requested strategy: description_seed_preset
-[000001] Strategy used: voice_design_from_registry
+[000001] Effective runtime strategy: voice_design_from_registry
+[000001] Runtime model: voice_design
+[000001] Fallback used: false
+[000001] Preset source: not_used
 ```
 
 Ejemplo correcto de una voz clone/reference:
 
 ```text
-[000001] Voice resolved: voice_global_0002 mode=clone_ready
+[000001] Voice selection source: manual_voice_id
+[000001] Voice resolved: voice_global_0002
+[000001] Voice name: locutor_clone_es
+[000001] Voice mode: clone_prompt
 [000001] Requested strategy: reference_conditioned
-[000001] Strategy used: reference_conditioned
+[000001] Effective runtime strategy: clone_prompt
+[000001] Runtime model: base
+[000001] Fallback used: false
 ```
 
 Ejemplo de fallback legacy permitido:
 
 ```text
-[000001] Voice resolved: voice_job_000001_0001 mode=design_only
+[000001] Voice selection source: job_auto_registered
+[000001] Voice resolved: voice_job_000001_0001
+[000001] Voice name: job_000001_voice
+[000001] Voice mode: design_only
 [000001] Requested strategy: legacy_preset_fallback
+[000001] Effective runtime strategy: legacy_preset_fallback
+[000001] Runtime model: voice_design
+[000001] Fallback used: false
 [000001] Preset used: mujer_podcast_seria_35_45 (source=global_default)
-[000001] Strategy used: legacy_preset_fallback
 ```
+
+## Corrección del alta de voces tras reset
+
+Se corrigió una inconsistencia real en el flujo de creación de voces de `wsl/design_voice.py`.
+
+Qué pasaba:
+
+- el script registraba la voz dos veces
+- la primera persistencia escribía `voice.json` y `voices_index.json` antes de terminar de generar y asociar todos los artefactos
+- después el mismo flujo volvía a entrar por `register_voice(...)`
+
+Eso hacía que la creación no fuese atómica y abría una ventana de colisión lógica dentro del propio flujo de alta. El filesystem vacío observado después de un reset no contradecía el error histórico, porque la colisión podía producirse durante un intento anterior y luego desaparecer tras la limpieza.
+
+Comportamiento corregido:
+
+- el flujo ahora genera `reference.wav` y `reference.txt` primero
+- después hace una única persistencia final en el registry
+- `--verbose-voice-debug` permite imprimir rutas efectivas, `voices_index.json`, `voice_id` provisional y búsquedas previas por nombre o por ID
 
 ## Borrado y reset del sistema
 
@@ -569,6 +612,12 @@ Con selección manual de voz:
 
 ```bash
 bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
+```
+
+Con trazabilidad ampliada:
+
+```bash
+bash wsl/run_audio.sh --job-id 000001 --overwrite --verbose-voice-debug
 ```
 
 ### Diseñar y registrar voz

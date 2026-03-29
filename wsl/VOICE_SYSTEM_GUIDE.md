@@ -218,6 +218,47 @@ Durante el alta:
 - `voice_name` no puede parecer un ID interno
 - si el registry ya está inconsistente, el flujo debe fallar en vez de seguir silenciosamente
 
+### 6.3 Causa corregida de falsa colisión tras reset
+
+Se corrigió un problema real en el flujo histórico de `wsl/design_voice.py`.
+
+El bug no estaba en un caché oculto del registry ni en una segunda fuente de verdad secreta. La causa raíz era que el propio flujo de diseño registraba la voz dos veces:
+
+1. una primera persistencia sin `reference.wav` ni `reference.txt` finales
+2. una segunda persistencia para completar la voz
+
+Ese diseño hacía que la creación no fuese atómica. La misma ejecución podía dejar una voz ya escrita en `voices_index.json` y `voice.json` antes de completar el flujo. Después el alta reentraba por `register_voice(...)` otra vez. Aunque el registry pareciese vacío más tarde tras un reset, eso no contradecía el error histórico: el conflicto se había producido en una ejecución anterior del propio alta, no en una fuente externa misteriosa.
+
+La corrección final fue simplificar el flujo:
+
+- validar nombre y `voice_id` provisional antes de sintetizar
+- generar los artefactos de referencia
+- persistir una sola vez al final
+
+### 6.4 Diagnóstico de alta
+
+Para depurar una alta:
+
+```bash
+bash wsl/run_design_voice.sh \
+  --scope global \
+  --voice-name narrador_documental_es \
+  --description "Voz masculina adulta, sobria y documental." \
+  --reference-text "Bienvenidos. Esta es una prueba." \
+  --verbose-voice-debug
+```
+
+Ese modo imprime:
+
+- `runtime.dataset_root`
+- `runtime.jobs_root`
+- `runtime.voices_root`
+- `runtime.voices_index_file`
+- `provisional_voice_id`
+- `existing_by_name`
+- `existing_by_id`
+- snapshot del índice cargado
+
 Errores esperados:
 
 ```text
@@ -344,10 +385,22 @@ Debe:
 - usar VoiceDesign para `design_only`
 - usar Base para `clone_ready`, `clone_prompt` o `reference_conditioned`
 - dejar trazabilidad en `job.json`, `status.json` y logs
+- imprimir siempre la fuente de selección, la voz resuelta, el modo, la estrategia pedida, la estrategia efectiva y si hubo fallback
 
 No debe:
 
 - caer silenciosamente a un preset global si ya existe una voz persistida seleccionada
+
+Importante:
+
+- la línea del wrapper sobre `QWEN_TTS_VOICE_PRESET` es solo configuración de fallback
+- no prueba por sí sola que ese preset se esté usando
+- el dato fiable es la combinación de:
+  - `Voice selection source`
+  - `Voice resolved`
+  - `Effective runtime strategy`
+  - `Preset source`
+  - `Fallback used`
 
 ### 10.2 `run_generate_audio_from_prompt.sh`
 
@@ -520,6 +573,12 @@ bash wsl/run_generate_audio_from_prompt.sh \
 
 ```bash
 bash wsl/run_audio.sh --job-id 000001 --voice-id voice_global_0001 --overwrite
+```
+
+### Batch por job con trazabilidad ampliada
+
+```bash
+bash wsl/run_audio.sh --job-id 000001 --overwrite --verbose-voice-debug
 ```
 
 ### Borrar una voz correctamente

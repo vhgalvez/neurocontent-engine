@@ -733,6 +733,7 @@ def main() -> None:
             return
 
         log(f"[audio] Jobs detectados: {job_ids}")
+        had_job_errors = False
         for job_id in job_ids:
             try:
                 process_job(
@@ -749,10 +750,13 @@ def main() -> None:
                     verbose_voice_debug=args.verbose_voice_debug,
                 )
             except Exception as exc:
+                had_job_errors = True
                 job_paths = ensure_job_structure(build_job_paths(job_id, get_runtime_paths()))
                 log(f"[{job_id}] Error generando audio: {exc}")
                 traceback.print_exc()
                 update_status(job_paths.status, audio_generated=False, last_step="audio_error_voice_design")
+        if had_job_errors:
+            sys.exit(1)
 
     except Exception as exc:
         log(f"[audio] Fallo general: {exc}")

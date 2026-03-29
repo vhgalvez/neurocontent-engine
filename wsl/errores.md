@@ -235,6 +235,32 @@ Qué hacer:
 - revisar `voice_registry.py`
 - revisar `wsl/VOICE_SYSTEM_GUIDE.md`
 
+### 5.b. Error de `voice_name` aparentemente existente tras reset
+
+Síntoma histórico:
+
+```text
+ERROR: ya existe una voz con ese nombre (voice_name=..., voice_id=...)
+```
+
+incluso después de que un reset posterior dejara `voices_index.json` vacío y `voices/` sin carpetas de voz.
+
+Causa corregida:
+
+- el flujo antiguo de `wsl/design_voice.py` registraba la voz dos veces
+- la primera persistencia ocurría antes de terminar los artefactos finales
+- la operación no era atómica
+
+Eso significa que el error podía originarse dentro del propio intento de alta y luego desaparecer del filesystem después de un reset. No hacía falta un caché oculto para explicarlo.
+
+Qué hacer ahora:
+
+- usar `--verbose-voice-debug` en `run_design_voice.sh`
+- comprobar `runtime.dataset_root`
+- comprobar `runtime.voices_root`
+- comprobar `provisional_voice_id`
+- comprobar `existing_by_name`
+
 ### 6. Error por `voice_name` duplicado
 
 Síntoma:
@@ -285,6 +311,12 @@ Qué hacer si vuelves a ver un caso parecido:
 - revisar `voice_mode` y `tts_strategy_default`
 - revisar `job.json` y `status.json`
 - revisar que el runtime esté entrando por la estrategia derivada desde `voice_registry.py`
+- revisar en consola estas líneas:
+  - `Voice selection source`
+  - `Voice resolved`
+  - `Effective runtime strategy`
+  - `Preset source`
+  - `Fallback used`
 
 ### 9. Error al borrar o necesidad de limpieza total
 
