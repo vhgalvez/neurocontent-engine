@@ -608,6 +608,25 @@ Cuando se use `design_only`, conviene priorizar identidad antes que estilo y red
 Voz masculina nativa en español de España, adulto de 30 a 45 años. Timbre medio-grave, estable y creíble. Dicción clara, ritmo natural, tono profesional y sobrio. Mantener el mismo sexo aparente, edad aparente y timbre entre clips. Evitar exageración expresiva.
 ```
 
+El runtime actual además normaliza `voice_instruct` hacia una versión más corta e identity-first antes de llamar a VoiceDesign. Eso reduce ambigüedad, pero no cambia la limitación principal: mientras la voz siga en `design_only`, `reference.wav` no se reutiliza como conditioning acústico.
+
+### Promocionar una voz `design_only` a `clone_prompt`
+
+Si ya tienes una voz `design_only` con `reference.wav` y quieres máxima estabilidad entre clips, el flujo correcto es:
+
+```bash
+bash wsl/run_promote_voice_to_clone.sh \
+  --voice-name marca_personal_es \
+  --overwrite
+```
+
+Ese comando:
+
+- carga el modelo Base
+- crea `voice_clone_prompt.json` desde `reference.wav` y `reference.txt`
+- actualiza la misma voz persistida a `voice_mode=clone_prompt`
+- permite que el batch entre por `base_clone_from_prompt`
+
 ## 16. Buenas prácticas
 
 - usar siempre el entorno `qwen_gpu`

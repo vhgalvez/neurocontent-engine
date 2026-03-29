@@ -311,7 +311,8 @@ def describe_voice_identity_consistency(
                 "Esta voz usa VoiceDesign desde voice_instruct + seed + texto. "
                 "reference.wav se conserva como trazabilidad, pero no se reutiliza como "
                 "condicionamiento acustico en runtime. Puede haber drift de timbre, sexo "
-                "aparente o energia entre clips."
+                "aparente o energia entre clips. Para una identidad fuerte entre clips, "
+                "hay que convertir esta voz a reference_conditioned o clone_prompt con Base."
             ),
             "reference_runtime_used": False,
         }

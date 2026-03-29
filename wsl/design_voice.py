@@ -15,6 +15,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 
 from config import configure_runtime, get_runtime_paths  # noqa: E402
 from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
+from voice_prompting import prepare_voice_design_instruct  # noqa: E402
 from voice_registry import (  # noqa: E402
     assign_voice_to_job,
     generate_voice_id,
@@ -138,6 +139,9 @@ def main() -> None:
             raise RuntimeError("job_id es obligatorio cuando scope=job")
         if not description or not reference_text:
             raise RuntimeError("description y reference_text no pueden estar vacios")
+        prompt_plan = prepare_voice_design_instruct(description)
+        effective_instruct = prompt_plan["effective_instruct"]
+        prompt_analysis = prompt_plan["analysis"]
 
         runtime = get_runtime_paths()
         normalized_voice_name = normalize_text(args.voice_name).replace(" ", "_")
@@ -165,7 +169,7 @@ def main() -> None:
 
         wavs, sample_rate = generator(
             text=reference_text,
-            instruct=description,
+            instruct=effective_instruct,
             language=args.language,
             non_streaming_mode=True,
         )
@@ -188,7 +192,7 @@ def main() -> None:
             model_name=resolved_model_path,
             language=args.language,
             seed=args.seed,
-            voice_instruct=description,
+            voice_instruct=effective_instruct,
             reference_file=str(reference_wav),
             reference_text_file=str(reference_txt),
             engine="voice_design",
@@ -212,10 +216,20 @@ def main() -> None:
         log(f"[design_voice] voice_id={record['voice_id']}")
         log("[design_voice] voice_mode=design_only strategy_default=description_seed_preset")
         log(
+            "[design_voice] Prompt profile: "
+            f"risk={prompt_analysis['risk']} "
+            f"words={prompt_analysis['word_count']} "
+            f"negations={prompt_analysis['negation_count']}"
+        )
+        if prompt_analysis["issues"]:
+            log(f"[design_voice] Prompt issues: {', '.join(prompt_analysis['issues'])}")
+        log(
             "[design_voice] Nota: design_only reutiliza voice_instruct + seed en cada clip. "
             "reference.wav queda como trazabilidad y muestra de referencia, pero no se usa como "
             "condicionamiento acustico directo en runtime."
         )
+        if args.verbose_voice_debug:
+            log(f"[design_voice] Effective voice_instruct: {effective_instruct}")
         log(f"[design_voice] Referencia guardada en {reference_wav}")
 
     except Exception as exc:

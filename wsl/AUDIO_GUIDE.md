@@ -42,6 +42,7 @@ Limitación importante:
 - `design_only` no es una clonación fuerte
 - reutiliza `voice_instruct` + `seed` en cada clip
 - `reference.wav` queda como trazabilidad y muestra, no como conditioning acústico directo
+- el runtime ahora normaliza `voice_instruct` a una versión más identity-first para reducir ambigüedad del prompt
 - si buscas máxima estabilidad entre clips, debes migrar a `reference_conditioned` o `clone_prompt`
 
 ## Entorno WSL2 verificado
@@ -138,6 +139,14 @@ Generar audio clone/reference:
 bash wsl/run_generate_audio_from_prompt.sh \
   --voice-id voice_global_0002 \
   --text "Esta es una prueba usando una voz clone/reference."
+```
+
+Promocionar una voz `design_only` existente a `clone_prompt`:
+
+```bash
+bash wsl/run_promote_voice_to_clone.sh \
+  --voice-name marca_personal_es \
+  --overwrite
 ```
 
 Borrar una voz correctamente:

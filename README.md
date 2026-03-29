@@ -667,6 +667,12 @@ Prompt recomendado para mayor estabilidad en `design_only`:
 Voz masculina nativa en español de España, adulto de 30 a 45 años. Timbre medio-grave, estable y creíble. Dicción clara, ritmo natural, tono profesional y sobrio. Mantener el mismo sexo aparente, edad aparente y timbre entre clips. Evitar exageración expresiva.
 ```
 
+Qué hace ahora el sistema con `design_only`:
+
+- conserva `voice_description` como trazabilidad
+- deriva un `voice_instruct` más corto y orientado a identidad para reducir drift semántico
+- sigue sin reutilizar `reference.wav` en runtime mientras la voz siga en `design_only`
+
 Voz de job:
 
 ```bash
@@ -694,6 +700,17 @@ bash wsl/run_generate_audio_from_prompt.sh \
   --voice-id voice_global_0002 \
   --text "Esta es una prueba con una voz persistida de tipo clone_ready."
 ```
+
+### Promocionar una voz `design_only` a `clone_prompt`
+
+```bash
+bash wsl/run_promote_voice_to_clone.sh \
+  --voice-name marca_personal_es \
+  --overwrite \
+  --verbose-voice-debug
+```
+
+Esto reutiliza `reference.wav` y `reference.txt`, genera `voice_clone_prompt.json` y actualiza la misma voz persistida para que el batch use Base con anclaje acústico fuerte.
 
 ### Registrar una voz nueva desde un `reference.wav`
 

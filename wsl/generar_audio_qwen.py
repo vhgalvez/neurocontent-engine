@@ -19,6 +19,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 from config import configure_runtime, get_runtime_paths  # noqa: E402
 from director import update_status  # noqa: E402
 from job_paths import build_job_paths, ensure_job_structure  # noqa: E402
+from voice_prompting import prepare_voice_design_instruct  # noqa: E402
 from voice_registry import (  # noqa: E402
     assign_voice_to_job,
     describe_voice_identity_consistency,
@@ -337,11 +338,13 @@ def generate_audio_voice_design(model, text: str, instruct: str, language: str):
 
 
 def synthesize_voice_design_from_registry(model, text: str, language: str, record: dict[str, Any], default_seed: int):
-    instruct = normalize_text(record.get("voice_instruct", "") or record.get("voice_description", ""))
-    if not instruct:
+    raw_instruct = normalize_text(record.get("voice_instruct", "") or record.get("voice_description", ""))
+    if not raw_instruct:
         raise RuntimeError(
             f"La voz {record.get('voice_id', '')} no tiene voice_instruct ni voice_description para VoiceDesign."
         )
+    prompt_plan = prepare_voice_design_instruct(raw_instruct)
+    instruct = prompt_plan["effective_instruct"]
     resolved_seed = int(record.get("seed", default_seed))
     set_global_seed(resolved_seed)
     wav, sample_rate = generate_audio_voice_design(
@@ -359,12 +362,21 @@ def synthesize_voice_design_from_registry(model, text: str, language: str, recor
         reference_conditioning_used=False,
         clone_prompt_used=False,
         voice_preset_used=record.get("voice_preset", ""),
-        voice_instruct_source="voice_record.voice_instruct" if record.get("voice_instruct") else "voice_record.voice_description",
+        voice_instruct_source=(
+            "voice_record.voice_instruct_normalized"
+            if record.get("voice_instruct")
+            else "voice_record.voice_description_normalized"
+        ),
         seed_source="voice_record.seed" if record.get("seed") is not None else "global_default_seed",
         preset_source="voice_record" if record.get("voice_preset") else "not_used",
         runtime_model="voice_design",
         identity_consistency_mode=consistency["identity_consistency_mode"],
-        identity_consistency_note=consistency["identity_consistency_note"],
+        identity_consistency_note=(
+            f"{consistency['identity_consistency_note']} "
+            f"Prompt risk={prompt_plan['analysis']['risk']} "
+            f"(words={prompt_plan['analysis']['word_count']}, "
+            f"negations={prompt_plan['analysis']['negation_count']})."
+        ),
         reference_runtime_used=consistency["reference_runtime_used"],
     )
 

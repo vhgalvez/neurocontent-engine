@@ -310,7 +310,18 @@ Si aun percibes drift aunque la selección sea correcta, la causa más probable 
 - `design_only` vuelve a interpretar `voice_instruct` en cada clip
 - `reference.wav` no se reutiliza como conditioning acústico directo
 - textos distintos pueden empujar prosodia y energía de forma distinta
+- si el prompt de voz es largo, muy negativo o mezcla demasiadas restricciones, el modelo puede promediar identidad y estilo
 - para máxima consistencia entre clips conviene migrar a `reference_conditioned` o `clone_prompt`
+
+Mitigación incorporada:
+
+- el sistema normaliza `voice_instruct` hacia una forma más corta e identity-first antes de usar VoiceDesign
+- aun así, esa mitigación no reemplaza el anclaje acústico del flujo Base
+- si la voz ya tiene `reference.wav`, conviértela con:
+
+```bash
+bash wsl/run_promote_voice_to_clone.sh --voice-name marca_personal_es --overwrite
+```
 
 Qué hacer si vuelves a ver un caso parecido:
 
