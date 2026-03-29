@@ -1,25 +1,122 @@
+# Audio Guide
 
-# AUDIO GUIDE
+## Propósito de este documento
 
-> **Nota:** Este archivo está obsoleto. La documentación y el flujo real del sistema están en los siguientes archivos:
+Este archivo ya no intenta duplicar toda la documentación del sistema de audio y voces. Su función actual es servir como guía rápida de operación y como índice de navegación hacia la documentación más detallada.
+
+Si necesitas una explicación extensa del sistema de voces, del registry o de la validación de integridad, el documento principal es:
+
+- [VOICE_SYSTEM_GUIDE.md](VOICE_SYSTEM_GUIDE.md)
+
+Si necesitas troubleshooting del entorno Qwen3-TTS en WSL2, el documento principal es:
+
+- [errores.md](errores.md)
+
+Si necesitas la visión general del repositorio y de la estructura de jobs, el documento principal es:
 
 - [README.md](../README.md)
-- [voice_registry.py](../voice_registry.py)
-- [job_paths.py](../job_paths.py)
-- [wsl/generar_audio_qwen.py](generar_audio_qwen.py)
-- [wsl/generate_audio_from_prompt.py](generate_audio_from_prompt.py)
-- [wsl/design_voice.py](design_voice.py)
 
-## Resumen operativo actual
+## Estado actual del sistema
 
-- La raíz principal de jobs es `VIDEO_JOBS_ROOT`, con fallback a `/mnt/c/Users/vhgal/Documents/desarrollo/ia/AI-video-automation/video-dataset/jobs`.
-- Los artefactos nuevos usan naming con `job_id`.
-- La voz se resuelve con precedencia: `--voice-id` → voz asignada al job → `VIDEO_DEFAULT_VOICE_ID` → fallback de compatibilidad.
-- La voz resuelta y la estrategia de síntesis son conceptos distintos: revisa `voice_mode`, `tts_strategy_default`, `tts_strategy_requested` y `tts_strategy_used`.
-- La trazabilidad de voz y audio queda en `job.json`, `status.json` y `voices/voices_index.json`.
-- El audio nuevo del job se escribe en `jobs/<job_id>/audio/<job_id>_narration.wav`.
-- El script nuevo vive en `jobs/<job_id>/source/<job_id>_script.json`.
-- La voz se registra con `voice_id` estable en `video-dataset/voices/`.
-- `job.json` registra la voz asignada y `status.json` expone el resumen operativo.
+El flujo de audio del proyecto opera sobre un dataset externo y no sobre una carpeta `jobs/` interna al repositorio como raíz principal de escritura. La configuración real se resuelve mediante `VIDEO_DATASET_ROOT` y `VIDEO_JOBS_ROOT`.
 
-Para instrucciones de uso y migración, consulta siempre [README.md](../README.md).
+El sistema de voces ya no debe entenderse como una colección informal de presets. Ahora existe una identidad vocal persistente con trazabilidad explícita:
+
+- `voice_id` técnico persistente
+- `voice_name` lógico humano
+- `voice.json` por voz
+- `voices_index.json` como índice global
+- asignación de voz en `job.json`
+- rastro operativo en `status.json`
+
+## Entorno WSL2 verificado
+
+El entorno funcional validado para Qwen3-TTS en WSL2 es:
+
+```bash
+conda activate qwen_gpu
+```
+
+Python válido:
+
+```bash
+/home/victory/miniconda3/envs/qwen_gpu/bin/python
+```
+
+El fallback correcto usado por los wrappers es:
+
+```bash
+export QWEN_PYTHON="${QWEN_PYTHON:-/home/victory/miniconda3/envs/qwen_gpu/bin/python}"
+```
+
+El entorno antiguo:
+
+```bash
+/home/victory/Qwen3-TTS/venv/bin/python
+```
+
+debe considerarse obsoleto y no debe volver a usarse.
+
+## Comandos de uso real
+
+Activar entorno y validar Python:
+
+```bash
+conda activate qwen_gpu
+which python
+python -V
+```
+
+Validar GPU y stack:
+
+```bash
+python -c "import torch; print('cuda', torch.cuda.is_available()); print('gpu', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'Ninguna')"
+python -c "import torchaudio; print('torchaudio', torchaudio.__version__)"
+python -c "import torchvision; print('torchvision', torchvision.__version__)"
+python -c "import qwen_tts; print('qwen_tts OK')"
+```
+
+Diseñar una voz nueva:
+
+```bash
+bash wsl/run_design_voice.sh \
+  --scope global \
+  --voice-name marca_personal_es \
+  --description "Voz madura, profesional y sobria para la marca." \
+  --reference-text "Hola, esta es la voz oficial de la marca."
+```
+
+Generar audio para un job:
+
+```bash
+bash wsl/run_audio.sh --job-id 000001 --overwrite
+```
+
+Generar audio clone/reference:
+
+```bash
+bash wsl/run_generate_audio_from_prompt.sh \
+  --job-id 000001 \
+  --voice-id voice_global_0001 \
+  --overwrite
+```
+
+Borrar una voz correctamente:
+
+```bash
+bash wsl/run_delete_voice.sh --voice-id voice_global_0001
+```
+
+## Reglas operativas importantes
+
+- No borres carpetas manualmente dentro de `video-dataset/voices/`.
+- No reutilices `voice_name` ya existentes.
+- No uses `voice_name` con forma de `voice_id` interno.
+- No asumas que `reference.wav` implica siempre conditioning acústico directo; eso depende de `voice_mode` y de la estrategia real de síntesis.
+- No mezcles el entorno conda actual con `venv` antiguos.
+
+## Dónde mirar según el problema
+
+- Error de entorno Python, CUDA, `torch` o `qwen_tts`: [errores.md](errores.md)
+- Dudas sobre `voice_id`, `voice_name`, `voices_index.json` o borrado consistente: [VOICE_SYSTEM_GUIDE.md](VOICE_SYSTEM_GUIDE.md)
+- Dudas sobre estructura de jobs, dataset o pipeline editorial: [README.md](../README.md)
