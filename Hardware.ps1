@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    Script para obtener un resumen detallado del hardware y guardarlo en un .txt
+    Script avanzado para obtener hardware y datos de sistema, guardando en un .txt organizado.
 #>
 
-$ArchivoSalida = "Informe_Hardware.txt"
+# Configuración de ruta (Escritorio para encontrarlo fácil, o deja solo el nombre para carpeta actual)
+$ArchivoSalida = Join-Path $PSScriptRoot "Informe_Hardware_Completo.txt"
 $ReporteTexto = New-Object System.Collections.Generic.List[string]
 
-# Función para imprimir en pantalla y guardar en variable para el TXT
 function Out-Both {
     param([string]$Texto, [string]$Color = "White")
     Write-Host $Texto -ForegroundColor $Color
@@ -14,53 +14,70 @@ function Out-Both {
 }
 
 Clear-Host
-$Separador = "==========================================================="
-Out-Both $Separador "Cyan"
-Out-Both "      INFORME DE HARDWARE: $env:COMPUTERNAME" "Cyan"
-Out-Both $Separador "Cyan"
+$Sep = "==========================================================================================="
+Out-Both $Sep "Cyan"
+Out-Both "      INFORME DETALLADO DE SISTEMA Y HARDWARE: $env:COMPUTERNAME" "Cyan"
+Out-Both "      Fecha: $(Get-Date -Format 'dd/MM/yyyy HH:mm:ss')" "Cyan"
+Out-Both $Sep "Cyan"
 
-# 1. Información del Sistema y Placa Base
-$system = Get-CimInstance -ClassName Win32_ComputerSystem
-$baseboard = Get-CimInstance -ClassName Win32_BaseBoard
-Out-Both "`n[+] PLACA BASE Y SISTEMA" "Yellow"
-$sysInfo = [PSCustomObject]@{
-    Fabricante = $system.Manufacturer
-    Modelo     = $system.Model
-    SKU        = $baseboard.Product
-    RAM_Total  = "$([Math]::Round($system.TotalPhysicalMemory / 1GB, 2)) GB"
-} 
-$sysInfo | Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
+# --- 1. DATOS DE SYSTEMINFO (S.O. Y ARRANQUE) ---
+Out-Both "`n[1] INFORMACIÓN DEL SISTEMA OPERATIVO" "Yellow"
+$sysinfo = systeminfo /fo csv | ConvertFrom-Csv
+[PSCustomObject]@{
+    OS             = $sysinfo."OS Name"
+    Version        = $sysinfo."OS Version"
+    Instalacion    = $sysinfo."Original Install Date"
+    UltimoArranque = $sysinfo."System Boot Time"
+    Uptime_Dias    = [Math]::Round(((Get-Date) - [DateTime]$sysinfo."System Boot Time").TotalDays, 2)
+} | Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
 
-# 2. Procesador (CPU)
-$cpu = Get-CimInstance -ClassName Win32_Processor
-Out-Both "[+] PROCESADOR" "Yellow"
-$cpu | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed | Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
+# --- 2. PLACA BASE Y BIOS ---
+Out-Both "[2] PLACA BASE Y BIOS" "Yellow"
+$bb = Get-CimInstance Win32_BaseBoard
+$bios = Get-CimInstance Win32_BIOS
+[PSCustomObject]@{
+    Fabricante = $bb.Manufacturer
+    Producto   = $bb.Product
+    VersionBIOS = $bios.SMBIOSBIOSVersion
+    FechaBIOS  = $bios.ReleaseDate.ToString("dd/MM/yyyy")
+} | Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
 
-# 3. Memoria RAM
-Out-Both "[+] MODULOS DE MEMORIA RAM" "Yellow"
-Get-CimInstance -ClassName Win32_PhysicalMemory | Select-Object BankLabel, 
+# --- 3. PROCESADOR (CPU) ---
+Out-Both "[3] PROCESADOR" "Yellow"
+Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, 
+    @{Name="MaxSpeed(MHz)"; Expression={$_.MaxClockSpeed}} | 
+    Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
+
+# --- 4. MEMORIA RAM ---
+$sysMem = Get-CimInstance Win32_ComputerSystem
+Out-Both "[4] MEMORIA RAM (Total: $([Math]::Round($sysMem.TotalPhysicalMemory / 1GB, 2)) GB)" "Yellow"
+Get-CimInstance Win32_PhysicalMemory | Select-Object BankLabel, 
     @{Name="Capacidad(GB)"; Expression={$_.Capacity / 1GB}}, 
-    Speed, PartNumber | Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
+    @{Name="Velocidad(MT/s)"; Expression={$_.Speed}}, PartNumber | 
+    Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
 
-# 4. Tarjeta Grafica (GPU)
-Out-Both "[+] TARJETA GRAFICA" "Yellow"
-Get-CimInstance -ClassName Win32_VideoController | Select-Object Name, 
-    @{Name="Version_Driver"; Expression={$_.DriverVersion}}, 
-    VideoProcessor | Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
+# --- 5. TARJETA GRÁFICA (GPU) ---
+Out-Both "[5] TARJETA GRÁFICA" "Yellow"
+Get-CimInstance Win32_VideoController | Select-Object Name, 
+    @{Name="Driver_Version"; Expression={$_.DriverVersion}}, 
+    @{Name="Resoluci0n"; Expression={"$($_.CurrentHorizontalResolution)x$($_.CurrentVerticalResolution)"}} | 
+    Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
 
-# 5. Almacenamiento (Discos)
-Out-Both "[+] UNIDADES DE DISCO" "Yellow"
-Get-CimInstance -ClassName Win32_DiskDrive | Select-Object Model, 
-    @{Name="Tamano(GB)"; Expression={[Math]::Round($_.Size / 1GB, 2)}}, 
-    MediaType, InterfaceType | Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
+# --- 6. ALMACENAMIENTO ---
+Out-Both "[6] UNIDADES DE DISCO" "Yellow"
+Get-CimInstance Win32_DiskDrive | Select-Object Model, 
+    @{Name="Tamaño(GB)"; Expression={[Math]::Round($_.Size / 1GB, 2)}}, 
+    MediaType, InterfaceType | 
+    Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
 
-# 6. Red
-Out-Both "[+] INTERFACES DE RED ACTIVAS" "Yellow"
-Get-NetAdapter | Where-Object Status -eq "Up" | Select-Object Name, InterfaceDescription, LinkSpeed | Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
+# --- 7. RED ---
+Out-Both "[7] RED (CONEXIONES ACTIVAS)" "Yellow"
+Get-NetAdapter | Where-Object Status -eq "Up" | Select-Object Name, InterfaceDescription, LinkSpeed | 
+    Format-Table -AutoSize | Out-String | ForEach-Object { Out-Both $_.TrimEnd() }
 
-Out-Both $Separador "Cyan"
-Out-Both "      FIN DEL INFORME - Archivo guardado como $ArchivoSalida" "Cyan"
-Out-Both $Separador "Cyan"
+Out-Both "`n$Sep" "Cyan"
+Out-Both "      INFORME FINALIZADO - Archivo: $ArchivoSalida" "Cyan"
+Out-Both $Sep "Cyan"
 
-# Guardar todo el contenido acumulado en el archivo TXT
+# Guardar en TXT
 $ReporteTexto | Out-File -FilePath $ArchivoSalida -Encoding utf8
